@@ -1,8 +1,12 @@
 #include "slice_select.h"
 
 float slice_select_weight_at(int slice_idx, float anchor) {
-    (void)slice_idx; (void)anchor;
-    return 1.0f;
+    static const float locked[8] = {0.0f, 0.5f, 1.0f, 0.7f, 0.0f, 0.5f, 1.0f, 1.2f};
+    if (slice_idx < 0) slice_idx = 0;
+    if (slice_idx > 7) slice_idx = 7;
+    if (anchor < 0.0f) anchor = 0.0f;
+    if (anchor > 1.0f) anchor = 1.0f;
+    return 1.0f * (1.0f - anchor) + locked[slice_idx] * anchor;
 }
 
 void slice_select_apply_phrase(const slice_inputs_t *in,

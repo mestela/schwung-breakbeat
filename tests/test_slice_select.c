@@ -32,7 +32,30 @@ static int g_pass = 0, g_fail = 0;
 } while (0)
 
 int main(void) {
-    /* Tests will be added in later phases. */
+    /* === weight_at: Anchor=0 → uniform 1.0 === */
+    for (int i = 0; i < 8; i++) {
+        float w = slice_select_weight_at(i, 0.0f);
+        ASSERT_NEAR(w, 1.0f, 1e-5f, "weight_at(i, 0) should be 1.0");
+    }
+
+    /* === weight_at: Anchor=1 → locked curve === */
+    {
+        static const float expected[8] = {0.0f, 0.5f, 1.0f, 0.7f, 0.0f, 0.5f, 1.0f, 1.2f};
+        for (int i = 0; i < 8; i++) {
+            float w = slice_select_weight_at(i, 1.0f);
+            ASSERT_NEAR(w, expected[i], 1e-5f, "weight_at(i, 1) should match locked curve");
+        }
+    }
+
+    /* === weight_at: Anchor=0.5 → halfway between 1.0 and locked === */
+    {
+        static const float locked[8] = {0.0f, 0.5f, 1.0f, 0.7f, 0.0f, 0.5f, 1.0f, 1.2f};
+        for (int i = 0; i < 8; i++) {
+            float w = slice_select_weight_at(i, 0.5f);
+            float expected = 0.5f * 1.0f + 0.5f * locked[i];
+            ASSERT_NEAR(w, expected, 1e-5f, "weight_at(i, 0.5) interpolation");
+        }
+    }
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
