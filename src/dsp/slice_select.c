@@ -44,6 +44,9 @@ int slice_select_next(const slice_inputs_t *in, slice_rand_fn rand_fn, void *ran
             if (j > 7) j = 7;
             return j;
         }
+        if (rand_fn(rand_ctx) < eff_anchor) {
+            return in->beat_position;
+        }
         return (in->current_slice + 1) & 7;
     }
     /* STAY branch */

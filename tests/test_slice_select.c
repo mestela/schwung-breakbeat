@@ -216,6 +216,43 @@ int main(void) {
         ASSERT_TRUE(repeat_count <= (int)(N * 0.20), "fill bar: anchor lock released");
     }
 
+    /* === select_next: Roll=0, Anchor=1, Complexity=0 -> slice locks to beat_position ===
+     * Move branch always taken (Roll=0). p_swap=0 (Complexity=0).
+     * With Anchor=1, the no-swap path always returns beat_position. */
+    {
+        test_rng_t rng = { .state = 0xa11ce1 };
+        slice_inputs_t in = {0};
+        in.complexity = 0.0f; in.anchor = 1.0f; in.roll = 0.0f;
+        in.phrase_bars = 0;
+
+        for (int bp = 0; bp < 8; bp++) {
+            in.beat_position = bp;
+            in.current_slice = (bp + 3) & 7;  /* deliberately misaligned */
+            int next = slice_select_next(&in, test_rand, &rng);
+            ASSERT_TRUE(next == bp, "Anchor=1 locks slice to beat_position");
+        }
+    }
+
+    /* === select_next: Roll=0, Anchor=1, Complexity=0, beat_position=0 over many iters ===
+     * Slice 0 should land on beat 1 every single time. */
+    {
+        test_rng_t rng = { .state = 0xb0a710d };
+        slice_inputs_t in = {0};
+        in.current_slice = 5;  /* misaligned start */
+        in.beat_position = 0;
+        in.complexity = 0.0f; in.anchor = 1.0f; in.roll = 0.0f;
+        in.phrase_bars = 0;
+
+        int slice0_count = 0;
+        const int N = 1000;
+        for (int i = 0; i < N; i++) {
+            int next = slice_select_next(&in, test_rand, &rng);
+            if (next == 0) slice0_count++;
+            in.current_slice = next;  /* feedback */
+        }
+        ASSERT_TRUE(slice0_count == N, "Anchor=1 beat_position=0: kick lands every time");
+    }
+
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
