@@ -583,6 +583,23 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "complexity") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->complexity * 100.0f));
     }
+    else if (strcmp(key, "anchor") == 0) {
+        return snprintf(buf, buf_len, "%d", (int)(bb->anchor * 100.0f));
+    }
+    else if (strcmp(key, "roll") == 0) {
+        return snprintf(buf, buf_len, "%d", (int)(bb->roll * 100.0f));
+    }
+    else if (strcmp(key, "phrase") == 0) {
+        int idx = 0;
+        if (bb->phrase_bars == 2) idx = 1;
+        else if (bb->phrase_bars == 4) idx = 2;
+        else if (bb->phrase_bars == 8) idx = 3;
+        else if (bb->phrase_bars == 16) idx = 4;
+        return snprintf(buf, buf_len, "%d", idx);
+    }
+    else if (strcmp(key, "fill") == 0) {
+        return snprintf(buf, buf_len, "%d", (int)(bb->fill * 100.0f));
+    }
     else if (strcmp(key, "retrigger") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->retrigger_prob * 100.0f));
     }
