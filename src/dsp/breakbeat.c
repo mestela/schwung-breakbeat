@@ -592,13 +592,19 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     
     // Auto-play on transport start, and STOP on stop!
     if (g_host && g_host->get_clock_status) {
-        if (g_host->get_clock_status() == 2) { // MOVE_CLOCK_STATUS_RUNNING
+        int running = (g_host->get_clock_status() == 2);
+        if (running && !bb->playing) {
+            srand((unsigned int)(time(NULL) ^ bb->sample_counter));
+            bb->bar_counter = 0;
+        }
+        if (running) {
             bb->playing = 1;
         } else {
             bb->playing = 0;
-            bb->play_pos = 0; // Reset to start
-            bb->clock_counter = 0; // Reset clocks!
-            bb->current_slice = 0; // Reset slice!
+            bb->play_pos = 0;
+            bb->clock_counter = 0;
+            bb->current_slice = 0;
+            bb->bar_counter = 0;
         }
     }
     
