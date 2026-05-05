@@ -6,6 +6,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include "plugin_api_v1.h"
+#include "slice_select.h"
+#include <time.h>
 
 /* WAV audio format codes */
 #define WAV_FORMAT_PCM   1
@@ -74,6 +76,11 @@ static preset_t g_presets[] = {
 static const char *g_loop_names[] = {
     "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
 };
+
+static float bb_rand(void *ctx) {
+    (void)ctx;
+    return (float)rand() / (float)RAND_MAX;
+}
 
 static void wp_log(const char *msg) {
     if (g_host && g_host->log) g_host->log(msg);
@@ -282,7 +289,10 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     // Handle MIDI Clock
     if (msg[0] == 0xF8) {
         bb->clock_counter++;
-        
+        if (bb->clock_counter % 96 == 0 && bb->clock_counter > 0) {
+            bb->bar_counter++;
+        }
+
         uint64_t current_samples = bb->sample_counter;
         uint64_t delta_samples = current_samples - bb->last_clock_samples;
         bb->last_clock_samples = current_samples;
@@ -307,29 +317,30 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
         if (trigger_clocks < 6) trigger_clocks = 6; // Min 16th note resolution
         
         if (bb->clock_counter % trigger_clocks == 0) {
-            float r = (float)rand() / (float)RAND_MAX;
-            float comp = bb->complexity;
-            
-            // Bar sync: force slice 0 at start of 4-bar loop (384 clocks)
-            if (bb->clock_counter % 384 == 0) {
-                bb->current_slice = 0;
-            }
-            else if (r < comp) {
-                // Pure randomness for complexity!
-                bb->current_slice = rand() % 8;
-            } else {
-                // Sequential play
-                bb->current_slice = (bb->current_slice + 1) % 8;
-            }
-            
-            // Roll for retrigger (sub-slice)
+            int trigger_in_bar = (bb->clock_counter % 96) / trigger_clocks;
+            int triggers_per_bar = 96 / trigger_clocks;
+            if (triggers_per_bar < 1) triggers_per_bar = 1;
+            int beat_position = (int)((float)trigger_in_bar * (8.0f / (float)triggers_per_bar)) & 7;
+
+            slice_inputs_t in = {
+                .current_slice = bb->current_slice,
+                .beat_position = beat_position,
+                .complexity    = bb->complexity,
+                .anchor        = bb->anchor,
+                .roll          = bb->roll,
+                .phrase_bars   = bb->phrase_bars,
+                .fill          = bb->fill,
+                .bar_in_phrase = bb->phrase_bars > 0 ? bb->bar_counter % bb->phrase_bars : 0,
+            };
+            bb->current_slice = slice_select_next(&in, bb_rand, NULL);
+
             bb->sub_slice_counter = 0;
             if ((float)rand() / (float)RAND_MAX < bb->retrigger_prob) {
                 bb->sub_slice_active = 1;
             } else {
                 bb->sub_slice_active = 0;
             }
-            
+
             bb->play_pos = bb->slice_starts[bb->current_slice];
         }
         return;
