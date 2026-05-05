@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "BB Gen",
   "abbrev": "BB",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -36,6 +36,15 @@
                 "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
               ],
               "default": 0
+            },
+            {
+              "key": "alt_loop",
+              "label": "Alt Loop",
+              "type": "enum",
+              "options": [
+                "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
+              ],
+              "default": 1
             },
             {
               "key": "length",
@@ -79,7 +88,7 @@
               "key": "phrase",
               "label": "Phrase",
               "type": "enum",
-              "options": ["Off", "2", "4", "8", "16"],
+              "options": ["Off", "2 bars", "4 bars", "8 bars", "16 bars"],
               "default": 0
             },
             {
@@ -104,11 +113,20 @@
               "type": "enum",
               "options": ["2x", "3x", "4x", "8x", "Rand"],
               "default": 0
+            },
+            {
+              "key": "swap_prob",
+              "label": "Swap Prob",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
             }
           ],
           "knobs": [
             "preset",
             "loop",
+            "alt_loop",
             "length",
             "phrase",
             "complexity",
@@ -116,7 +134,8 @@
             "roll",
             "fill",
             "retrigger",
-            "retrigger_rate"
+            "retrigger_rate",
+            "swap_prob"
           ]
         }
       }

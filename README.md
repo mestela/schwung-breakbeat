@@ -25,9 +25,11 @@ and **Phrase** add motion, fills, and multi-bar phrasing.
 | Setting | Values | What it does |
 |---|---|---|
 | **Loop** | 23 samples | Selects which WAV to slice. Includes amen01–20, apache, do, funkydrummer, groove, think, useme, and others. |
+| **Alt Loop** | 23 samples | Selects the loop used for phrase fills. |
 | **Length** | 0.25, 0.5, 1, 2, 4, 8 | Trigger interval in bars. At 0.25, you get 8 triggers per bar (16th-note resolution); at 1, you get 2 triggers per bar; at 8, one trigger per 8 bars. |
-| **Phrase** | Off, 2, 4, 8, 16 | Multi-bar phrase length. At Off, every bar plays the same. When set, the *last* bar of each phrase becomes a fill bar (modulated by **Fill**). |
-| **Retrig Rate** | 2, 3, 4 | Sub-divisions per retrigger event. |
+| **Phrase** | Off, 2 bars, 4 bars, 8 bars, 16 bars | Multi-bar phrase length. At Off, every bar plays the same. When set, the *last* bar of each phrase becomes a fill bar (modulated by **Fill**). |
+| **Retrig Rate** | 2x, 3x, 4x, 8x, Rand | Sub-divisions per retrigger event. |
+| **Swap Prob** | 0–100 | Probability of swapping to Alt Loop on the last bar of a phrase. |
 
 ### Meta
 

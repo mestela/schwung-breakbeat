@@ -53,6 +53,9 @@ typedef struct {
     uint64_t sample_counter;
     uint64_t last_clock_samples;
     float calculated_bpm;
+    float swap_prob;
+    int alt_loop_idx;
+    int main_loop_idx;
     
 } breakbeat_t;
 
@@ -262,6 +265,9 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->sample_counter = 0;
     bb->last_clock_samples = 0;
     bb->calculated_bpm = 150.0f; // Default fallback
+    bb->swap_prob = 0.0f;
+    bb->alt_loop_idx = 1; // Default to amen09
+    bb->main_loop_idx = 0; // Default to amen01
     bb->complexity = 0.5f;
     bb->anchor = 0.0f;
     bb->roll = 0.0f;
@@ -293,6 +299,12 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     breakbeat_t *bb = (breakbeat_t *)instance;
     if (!bb || len < 1) return;
     
+    if (msg[0] == 0xFA || msg[0] == 0xFB) {
+        bb->clock_counter = 0;
+        bb->bar_counter = 0;
+        return;
+    }
+    
     // Handle MIDI Clock
     if (msg[0] == 0xF8) {
         bb->clock_counter++;
@@ -310,6 +322,22 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             bb->calculated_bpm = bb->calculated_bpm * 0.95f + measured_bpm * 0.05f;
         }
         
+        // Phrasing and Fill behavior
+        if (bb->phrase_bars > 0 && bb->clock_counter % 96 == 0) {
+            int bar_in_phrase = (bb->clock_counter / 96) % bb->phrase_bars;
+            
+            // At the start of the LAST bar of the phrase, roll for swap!
+            if (bar_in_phrase == bb->phrase_bars - 1) {
+                if ((float)rand() / (float)RAND_MAX < bb->swap_prob) {
+                    bb->pending_loop_idx = bb->alt_loop_idx;
+                }
+            }
+            // At the start of the NEW phrase, restore main loop!
+            else if (bar_in_phrase == 0) {
+                bb->pending_loop_idx = bb->main_loop_idx;
+            }
+        }
+
         // Deferred loop loading at start of bar (every 96 clocks = 4 beats)
         if (bb->clock_counter % 96 == 0 && bb->pending_loop_idx >= 0) {
             char path[512];
@@ -447,10 +475,25 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             snprintf(path, sizeof(path), "/data/UserData/schwung/modules/sound_generators/breakbeat/samples/%s.wav", g_loop_names[idx]);
             open_wav(bb, path);
             bb->loop_idx = idx;
+            bb->main_loop_idx = idx; // Remember main loop!
             bb->pending_loop_idx = -1;
         } else {
             bb->pending_loop_idx = idx;
+            bb->main_loop_idx = idx; // Remember main loop!
         }
+    }
+    else if (strcmp(key, "alt_loop") == 0) {
+        int idx = 0;
+        int found = 0;
+        for (int i = 0; i < 23; i++) {
+            if (strcmp(g_loop_names[i], val) == 0) {
+                idx = i;
+                found = 1;
+                break;
+            }
+        }
+        if (!found) idx = atoi(val);
+        bb->alt_loop_idx = idx;
     }
     else if (strcmp(key, "length") == 0) {
         int idx = atoi(val);
@@ -475,11 +518,20 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->roll > 1.0f) bb->roll = 1.0f;
     }
     else if (strcmp(key, "phrase") == 0) {
-        int idx = atoi(val);
+        int idx = -1;
+        const char *phrase_names[] = {"Off", "2 bars", "4 bars", "8 bars", "16 bars"};
+        for (int i = 0; i < 5; i++) {
+            if (strcmp(phrase_names[i], val) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) idx = atoi(val);
+        
         static const int phrase_values[] = {0, 2, 4, 8, 16};
-        if (idx < 0) idx = 0;
-        if (idx > 4) idx = 4;
-        bb->phrase_bars = phrase_values[idx];
+        if (idx >= 0 && idx < 5) {
+            bb->phrase_bars = phrase_values[idx];
+        }
     }
     else if (strcmp(key, "fill") == 0) {
         bb->fill = atof(val) / 100.0f;
@@ -501,6 +553,11 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         else if (idx == 1) bb->retrigger_divisions = 3;
         else if (idx == 2) bb->retrigger_divisions = 4;
         else if (idx == 3) bb->retrigger_divisions = 8;
+    }
+    else if (strcmp(key, "swap_prob") == 0) {
+        bb->swap_prob = atof(val) / 100.0f;
+        if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
+        if (bb->swap_prob > 1.0f) bb->swap_prob = 1.0f;
     }
     else if (strcmp(key, "save_preset") == 0) {
         int trigger = atoi(val);
@@ -593,7 +650,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     
 
     if (strcmp(key, "ui_hierarchy") == 0) {
-        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"loop\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"loop\",\"label\":\"Loop\",\"type\":\"enum\",\"options\":[\"amen01\",\"amen09\",\"amen18\",\"amen19\",\"amen20\",\"apache\",\"do\",\"eeloil\",\"fireeater\",\"funkydrummer\",\"groove\",\"hungup_0\",\"king\",\"kool\",\"mechanicalman\",\"neworleans\",\"riffin\",\"ripple\",\"sesame\",\"sport\",\"squib\",\"think\",\"useme\"]},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2\",\"4\",\"8\",\"16\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
+        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"loop\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"loop\",\"label\":\"Loop\",\"type\":\"enum\",\"options\":[\"amen01\",\"amen09\",\"amen18\",\"amen19\",\"amen20\",\"apache\",\"do\",\"eeloil\",\"fireeater\",\"funkydrummer\",\"groove\",\"hungup_0\",\"king\",\"kool\",\"mechanicalman\",\"neworleans\",\"riffin\",\"ripple\",\"sesame\",\"sport\",\"squib\",\"think\",\"useme\"]},{\"key\":\"alt_loop\",\"label\":\"Alt Loop\",\"type\":\"enum\",\"options\":[\"amen01\",\"amen09\",\"amen18\",\"amen19\",\"amen20\",\"apache\",\"do\",\"eeloil\",\"fireeater\",\"funkydrummer\",\"groove\",\"hungup_0\",\"king\",\"kool\",\"mechanicalman\",\"neworleans\",\"riffin\",\"ripple\",\"sesame\",\"sport\",\"squib\",\"think\",\"useme\"]},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"swap_prob\",\"label\":\"Swap Prob\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
         strncpy(buf, hierarchy, buf_len);
         return strlen(hierarchy);
     }
@@ -602,13 +659,14 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"key\":\"preset\",\"name\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
             "{\"key\":\"loop\",\"name\":\"Loop\",\"type\":\"enum\",\"options\":[\"amen01\",\"amen09\",\"amen18\",\"amen19\",\"amen20\",\"apache\",\"do\",\"eeloil\",\"fireeater\",\"funkydrummer\",\"groove\",\"hungup_0\",\"king\",\"kool\",\"mechanicalman\",\"neworleans\",\"riffin\",\"ripple\",\"sesame\",\"sport\",\"squib\",\"think\",\"useme\"]},"
             "{\"key\":\"length\",\"name\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},"
-            "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2\",\"4\",\"8\",\"16\"]},"
+            "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
             "{\"key\":\"complexity\",\"name\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"anchor\",\"name\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"roll\",\"name\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"fill\",\"name\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"retrigger\",\"name\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"retrigger_rate\",\"name\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},"
+            "{\"key\":\"swap_prob\",\"name\":\"Swap Prob\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"save_preset\",\"name\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}"
         "]";
         strncpy(buf, json, buf_len);
@@ -656,6 +714,12 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         else if (bb->phrase_bars == 16) idx = 4;
         return snprintf(buf, buf_len, "%d", idx);
     }
+    else if (strcmp(key, "alt_loop") == 0) {
+        if (bb->alt_loop_idx >= 0 && bb->alt_loop_idx < 23) {
+            return snprintf(buf, buf_len, "%s", g_loop_names[bb->alt_loop_idx]);
+        }
+        return snprintf(buf, buf_len, "unknown");
+    }
     else if (strcmp(key, "fill") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->fill * 100.0f));
     }
@@ -663,11 +727,10 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len, "%d", (int)(bb->retrigger_prob * 100.0f));
     }
     else if (strcmp(key, "retrigger_rate") == 0) {
-        const char *names[] = {"2x", "3x", "4x", "8x", "Rand"};
-        int idx = bb->retrigger_rate_idx;
-        if (idx < 0) idx = 0;
-        if (idx > 4) idx = 4;
-        return snprintf(buf, buf_len, "%s", names[idx]);
+        return snprintf(buf, buf_len, "%d", bb->retrigger_rate_idx);
+    }
+    else if (strcmp(key, "swap_prob") == 0) {
+        return snprintf(buf, buf_len, "%d", (int)(bb->swap_prob * 100.0f));
     }
     else if (strcmp(key, "state") == 0) {
         int len_idx = 2; // Default to 1.0
