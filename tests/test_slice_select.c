@@ -109,6 +109,113 @@ int main(void) {
         ASSERT_NEAR(r, 0.3f,  1e-5f, "fill=0.5: roll halved");
     }
 
+    /* === select_next: Roll=0, Anchor=0, Complexity=0 → sequential advance ===
+     * With Complexity=0, p_swap is always 0, so move-branch always falls through
+     * to (current+1)&7. Roll=0 means stay-branch never fires. */
+    {
+        test_rng_t rng = { .state = 12345 };
+        slice_inputs_t in = {0};
+        in.current_slice = 3;
+        in.beat_position = 3;
+        in.complexity = 0.0f; in.anchor = 0.0f; in.roll = 0.0f;
+        in.phrase_bars = 0;
+
+        int next = slice_select_next(&in, test_rand, &rng);
+        ASSERT_TRUE(next == 4, "sequential advance from 3 -> 4");
+
+        in.current_slice = 7;
+        next = slice_select_next(&in, test_rand, &rng);
+        ASSERT_TRUE(next == 0, "sequential advance wraps 7 -> 0");
+    }
+
+    /* === select_next: Roll=1, Anchor=0, current=4 -> walks should occur ===
+     * Anchor=0 -> weight=1 for all slices -> p_repeat = 1 - 1 = 0.
+     * Escape hatch is 5%; the other 95% goes through walk-+/-1.
+     * From slice 4, walk lands on 3 or 5; escape jumps land on 6, 7, or 0
+     * (current+2, +3, +4). None of those are 4. So `next == 4` should be ZERO. */
+    {
+        test_rng_t rng = { .state = 0x1234abcd };
+        slice_inputs_t in = {0};
+        in.current_slice = 4;
+        in.beat_position = 4;
+        in.complexity = 0.5f; in.anchor = 0.0f; in.roll = 1.0f;
+        in.phrase_bars = 0;
+
+        int repeat_count = 0, walk_neighbor = 0;
+        const int N = 2000;
+        for (int i = 0; i < N; i++) {
+            int next = slice_select_next(&in, test_rand, &rng);
+            if (next == 4) repeat_count++;
+            if (next == 3 || next == 5) walk_neighbor++;
+        }
+        ASSERT_TRUE(repeat_count == 0, "Roll=1 Anchor=0 from slice 4: should never land on 4");
+        ASSERT_TRUE(walk_neighbor > (int)(N * 0.80), "Roll=1 Anchor=0: >=80% are +/-1 walks");
+    }
+
+    /* === select_next: Roll=1, Anchor=1, current=0 -> repeat dominates ===
+     * Anchor=1 + slice 0 -> weight=0 -> p_repeat=1.
+     * 5% escape hatch fires; the other 95% should repeat slice 0.
+     * Allow >=80% repeat to give the PRNG some headroom. */
+    {
+        test_rng_t rng = { .state = 0xfacefeed };
+        slice_inputs_t in = {0};
+        in.current_slice = 0;
+        in.beat_position = 0;
+        in.complexity = 0.5f; in.anchor = 1.0f; in.roll = 1.0f;
+        in.phrase_bars = 0;
+
+        int repeat_count = 0;
+        const int N = 2000;
+        for (int i = 0; i < N; i++) {
+            int next = slice_select_next(&in, test_rand, &rng);
+            if (next == 0) repeat_count++;
+        }
+        ASSERT_TRUE(repeat_count >= (int)(N * 0.80), "Roll=1 Anchor=1 slice=0: repeats >=80%");
+    }
+
+    /* === select_next: Roll=0, Anchor=0, Complexity=1 -> uniform random ===
+     * All slices reachable; bucket counts roughly N/8 each. Allow +/-25%. */
+    {
+        test_rng_t rng = { .state = 0x55aa55aa };
+        slice_inputs_t in = {0};
+        in.current_slice = 0;
+        in.beat_position = 0;
+        in.complexity = 1.0f; in.anchor = 0.0f; in.roll = 0.0f;
+        in.phrase_bars = 0;
+
+        int counts[8] = {0};
+        const int N = 8000;
+        for (int i = 0; i < N; i++) {
+            int next = slice_select_next(&in, test_rand, &rng);
+            ASSERT_TRUE(next >= 0 && next < 8, "slice in 0..7");
+            counts[next]++;
+        }
+        for (int i = 0; i < 8; i++) {
+            ASSERT_TRUE(counts[i] >= 750 && counts[i] <= 1250, "uniform distribution per slice");
+        }
+    }
+
+    /* === select_next: Phrase=4, bar_in_phrase=3, Fill=1 -> ignores Anchor & Roll ===
+     * Inputs say Anchor=1, Roll=1 (would lock slice 0). But fill bar zeros both.
+     * With effective_complexity=1, anchor=0, roll=0, move-branch always rolls
+     * uniform 0..7. Slice 0 lands ~12.5% of the time, not 95%. */
+    {
+        test_rng_t rng = { .state = 0xc0ffee };
+        slice_inputs_t in = {0};
+        in.current_slice = 0;
+        in.beat_position = 0;
+        in.complexity = 1.0f; in.anchor = 1.0f; in.roll = 1.0f;
+        in.phrase_bars = 4; in.fill = 1.0f; in.bar_in_phrase = 3;
+
+        int repeat_count = 0;
+        const int N = 2000;
+        for (int i = 0; i < N; i++) {
+            int next = slice_select_next(&in, test_rand, &rng);
+            if (next == 0) repeat_count++;
+        }
+        ASSERT_TRUE(repeat_count <= (int)(N * 0.20), "fill bar: anchor lock released");
+    }
+
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

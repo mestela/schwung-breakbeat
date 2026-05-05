@@ -31,6 +31,36 @@ void slice_select_apply_phrase(const slice_inputs_t *in,
 }
 
 int slice_select_next(const slice_inputs_t *in, slice_rand_fn rand_fn, void *rand_ctx) {
-    (void)in; (void)rand_fn; (void)rand_ctx;
-    return 0;
+    float eff_complexity, eff_anchor, eff_roll;
+    slice_select_apply_phrase(in, &eff_complexity, &eff_anchor, &eff_roll);
+
+    float r = rand_fn(rand_ctx);
+    if (r < (1.0f - eff_roll)) {
+        /* MOVE branch */
+        float p_swap = eff_complexity * slice_select_weight_at(in->beat_position, eff_anchor);
+        if (rand_fn(rand_ctx) < p_swap) {
+            int j = (int)(rand_fn(rand_ctx) * 8.0f);
+            if (j < 0) j = 0;
+            if (j > 7) j = 7;
+            return j;
+        }
+        return (in->current_slice + 1) & 7;
+    }
+    /* STAY branch */
+    if (rand_fn(rand_ctx) < SLICE_SELECT_ESCAPE_P) {
+        /* Escape: jump 2..4 forward */
+        int j = 2 + (int)(rand_fn(rand_ctx) * 3.0f);
+        if (j < 2) j = 2;
+        if (j > 4) j = 4;
+        return (in->current_slice + j) & 7;
+    }
+    {
+        float w_here = slice_select_weight_at(in->current_slice, eff_anchor);
+        float p_repeat = 1.0f - w_here;
+        if (rand_fn(rand_ctx) < p_repeat) {
+            return in->current_slice;
+        }
+        int dir = (rand_fn(rand_ctx) < 0.5f) ? 1 : 7;
+        return (in->current_slice + dir) & 7;
+    }
 }
