@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "BB Gen",
   "abbrev": "BB",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -60,6 +60,37 @@
               "default": 50
             },
             {
+              "key": "anchor",
+              "label": "Anchor",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "roll",
+              "label": "Roll",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "phrase",
+              "label": "Phrase",
+              "type": "enum",
+              "options": ["Off", "2", "4", "8", "16"],
+              "default": 0
+            },
+            {
+              "key": "fill",
+              "label": "Fill",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
               "key": "retrigger",
               "label": "Retrigger",
               "type": "int",
@@ -80,7 +111,11 @@
             "preset",
             "loop",
             "length",
+            "phrase",
             "complexity",
+            "anchor",
+            "roll",
+            "fill",
             "retrigger",
             "retrigger_rate"
           ]
