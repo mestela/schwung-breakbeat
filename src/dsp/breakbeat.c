@@ -16,7 +16,13 @@ typedef struct {
     int loop_idx;
     float length;
     float complexity;
-    
+    float anchor;
+    float roll;
+    int   phrase_bars;
+    float fill;
+    int   bar_counter;
+    int   reseed_pending;
+
     // WAV file state
     int fd;
     void *map;
@@ -243,6 +249,12 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->last_clock_samples = 0;
     bb->calculated_bpm = 150.0f; // Default fallback
     bb->complexity = 0.5f;
+    bb->anchor = 0.0f;
+    bb->roll = 0.0f;
+    bb->phrase_bars = 0;
+    bb->fill = 0.0f;
+    bb->bar_counter = 0;
+    bb->reseed_pending = 0;
     bb->fd = -1;
     
     if (g_host && g_host->log) g_host->log("breakbeat: instance created");
