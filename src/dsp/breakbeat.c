@@ -48,6 +48,7 @@ typedef struct {
     int sub_slice_active;
     int sub_slice_counter;
     int retrigger_divisions;
+    int retrigger_rate_idx;
     
     uint64_t sample_counter;
     uint64_t last_clock_samples;
@@ -256,6 +257,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->sub_slice_active = 0;
     bb->sub_slice_counter = 0;
     bb->retrigger_divisions = 2;
+    bb->retrigger_rate_idx = 0;
     bb->length = 1.0f;
     bb->sample_counter = 0;
     bb->last_clock_samples = 0;
@@ -342,6 +344,15 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             bb->sub_slice_counter = 0;
             if ((float)rand() / (float)RAND_MAX < bb->retrigger_prob) {
                 bb->sub_slice_active = 1;
+                
+                // Randomize divisions if "Rand" is selected!
+                if (bb->retrigger_rate_idx == 4) {
+                    int r2 = rand() % 4;
+                    if (r2 == 0) bb->retrigger_divisions = 2;
+                    else if (r2 == 1) bb->retrigger_divisions = 3;
+                    else if (r2 == 2) bb->retrigger_divisions = 4;
+                    else if (r2 == 3) bb->retrigger_divisions = 8;
+                }
             } else {
                 bb->sub_slice_active = 0;
             }
@@ -481,9 +492,15 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->retrigger_prob > 1.0f) bb->retrigger_prob = 1.0f;
     }
     else if (strcmp(key, "retrigger_rate") == 0) {
-        bb->retrigger_divisions = atoi(val);
-        if (bb->retrigger_divisions < 2) bb->retrigger_divisions = 2;
-        if (bb->retrigger_divisions > 4) bb->retrigger_divisions = 4;
+        int idx = atoi(val);
+        if (idx < 0) idx = 0;
+        if (idx > 4) idx = 4;
+        bb->retrigger_rate_idx = idx;
+        
+        if (idx == 0) bb->retrigger_divisions = 2;
+        else if (idx == 1) bb->retrigger_divisions = 3;
+        else if (idx == 2) bb->retrigger_divisions = 4;
+        else if (idx == 3) bb->retrigger_divisions = 8;
     }
     else if (strcmp(key, "save_preset") == 0) {
         int trigger = atoi(val);
@@ -576,7 +593,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     
 
     if (strcmp(key, "ui_hierarchy") == 0) {
-        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"loop\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"loop\",\"label\":\"Loop\",\"type\":\"enum\",\"options\":[\"amen01\",\"amen09\",\"amen18\",\"amen19\",\"amen20\",\"apache\",\"do\",\"eeloil\",\"fireeater\",\"funkydrummer\",\"groove\",\"hungup_0\",\"king\",\"kool\",\"mechanicalman\",\"neworleans\",\"riffin\",\"ripple\",\"sesame\",\"sport\",\"squib\",\"think\",\"useme\"]},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2\",\"4\",\"8\",\"16\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"int\",\"min\":2,\"max\":4},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
+        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"loop\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"loop\",\"label\":\"Loop\",\"type\":\"enum\",\"options\":[\"amen01\",\"amen09\",\"amen18\",\"amen19\",\"amen20\",\"apache\",\"do\",\"eeloil\",\"fireeater\",\"funkydrummer\",\"groove\",\"hungup_0\",\"king\",\"kool\",\"mechanicalman\",\"neworleans\",\"riffin\",\"ripple\",\"sesame\",\"sport\",\"squib\",\"think\",\"useme\"]},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2\",\"4\",\"8\",\"16\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
         strncpy(buf, hierarchy, buf_len);
         return strlen(hierarchy);
     }
@@ -591,7 +608,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"key\":\"roll\",\"name\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"fill\",\"name\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"retrigger\",\"name\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},"
-            "{\"key\":\"retrigger_rate\",\"name\":\"Retrig Rate\",\"type\":\"int\",\"min\":2,\"max\":4},"
+            "{\"key\":\"retrigger_rate\",\"name\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},"
             "{\"key\":\"save_preset\",\"name\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}"
         "]";
         strncpy(buf, json, buf_len);
@@ -646,7 +663,11 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len, "%d", (int)(bb->retrigger_prob * 100.0f));
     }
     else if (strcmp(key, "retrigger_rate") == 0) {
-        return snprintf(buf, buf_len, "%d", bb->retrigger_divisions);
+        const char *names[] = {"2x", "3x", "4x", "8x", "Rand"};
+        int idx = bb->retrigger_rate_idx;
+        if (idx < 0) idx = 0;
+        if (idx > 4) idx = 4;
+        return snprintf(buf, buf_len, "%s", names[idx]);
     }
     else if (strcmp(key, "state") == 0) {
         int len_idx = 2; // Default to 1.0

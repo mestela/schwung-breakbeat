@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "BB Gen",
   "abbrev": "BB",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -33,7 +33,7 @@
               "label": "Loop",
               "type": "enum",
               "options": [
-                "action", "amen", "apache", "around", "boogiewoogie", "delight", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hitormiss", "hotline", "hungup_0", "hungup_1", "impeach", "king", "kool", "marymary", "mechanicalman", "movement", "newday", "neworleans", "riffin", "rill", "ripple", "sesame", "sneakin", "sport", "squib", "swat", "think", "useme"
+                "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
               ],
               "default": 0
             },
@@ -101,10 +101,9 @@
             {
               "key": "retrigger_rate",
               "label": "Retrig Rate",
-              "type": "int",
-              "min": 2,
-              "max": 4,
-              "default": 2
+              "type": "enum",
+              "options": ["2x", "3x", "4x", "8x", "Rand"],
+              "default": 0
             }
           ],
           "knobs": [
