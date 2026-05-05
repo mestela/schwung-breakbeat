@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include "host/plugin_api_v1.h"
+#include "plugin_api_v1.h"
 
 /* WAV audio format codes */
 #define WAV_FORMAT_PCM   1
