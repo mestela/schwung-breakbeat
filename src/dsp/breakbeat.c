@@ -65,12 +65,17 @@ typedef struct {
     float complexity;
     float retrigger_prob;
     int retrigger_divisions;
+    float anchor;
+    float roll;
+    int phrase_bars;
+    float fill;
 } preset_t;
 
 static preset_t g_presets[] = {
-    {"Calm", 0, 0.5f, 0.18f, 0.16f, 2},
-    {"Mid", 1, 0.5f, 0.56f, 0.08f, 4},
-    {"Frantic", 18, 0.25f, 0.80f, 0.11f, 4}
+    /* name, loop, length, cplx, retrig, ratediv, anchor, roll, phrase, fill */
+    {"Calm",    0,  0.5f,  0.18f, 0.16f, 2,  0.80f, 0.70f, 4, 0.50f},
+    {"Mid",     1,  0.5f,  0.56f, 0.08f, 4,  0.60f, 0.50f, 4, 0.60f},
+    {"Frantic", 18, 0.25f, 0.80f, 0.11f, 4,  0.30f, 0.20f, 2, 0.80f}
 };
 
 static const char *g_loop_names[] = {
@@ -389,7 +394,11 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         bb->complexity = p->complexity;
         bb->retrigger_prob = p->retrigger_prob;
         bb->retrigger_divisions = p->retrigger_divisions;
-        
+        bb->anchor = p->anchor;
+        bb->roll = p->roll;
+        bb->phrase_bars = p->phrase_bars;
+        bb->fill = p->fill;
+
         int is_running = 0;
         if (g_host && g_host->get_clock_status) {
             is_running = (g_host->get_clock_status() == 2);
@@ -488,8 +497,21 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             else if (bb->length == 4.0f) len_idx = 4;
             else if (bb->length == 8.0f) len_idx = 5;
 
-            snprintf(buf, sizeof(buf), "PRESET_DATA: {\"name\":\"%s\",\"loop\":%d,\"length\":%d,\"complexity\":%d,\"retrigger\":%d,\"retrigger_rate\":%d}",
-                g_presets[bb->preset_idx].name, bb->loop_idx, len_idx, (int)(bb->complexity * 100.0f), (int)(bb->retrigger_prob * 100.0f), bb->retrigger_divisions);
+            int phrase_idx = 0;
+            if (bb->phrase_bars == 2) phrase_idx = 1;
+            else if (bb->phrase_bars == 4) phrase_idx = 2;
+            else if (bb->phrase_bars == 8) phrase_idx = 3;
+            else if (bb->phrase_bars == 16) phrase_idx = 4;
+
+            snprintf(buf, sizeof(buf), "PRESET_DATA: {\"name\":\"%s\",\"loop\":%d,\"length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,\"retrigger\":%d,\"retrigger_rate\":%d}",
+                g_presets[bb->preset_idx].name, bb->loop_idx, len_idx,
+                (int)(bb->complexity * 100.0f),
+                (int)(bb->anchor * 100.0f),
+                (int)(bb->roll * 100.0f),
+                phrase_idx,
+                (int)(bb->fill * 100.0f),
+                (int)(bb->retrigger_prob * 100.0f),
+                bb->retrigger_divisions);
             g_host->log(buf);
         }
     }
@@ -528,6 +550,22 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         }
         if (json_get_string(val, "complexity", float_str, sizeof(float_str))) {
             bb->complexity = atof(float_str);
+        }
+        if (json_get_string(val, "anchor", float_str, sizeof(float_str))) {
+            bb->anchor = atof(float_str) / 100.0f;
+        }
+        if (json_get_string(val, "roll", float_str, sizeof(float_str))) {
+            bb->roll = atof(float_str) / 100.0f;
+        }
+        if (json_get_string(val, "phrase", float_str, sizeof(float_str))) {
+            int idx = atoi(float_str);
+            static const int phrase_values[] = {0, 2, 4, 8, 16};
+            if (idx < 0) idx = 0;
+            if (idx > 4) idx = 4;
+            bb->phrase_bars = phrase_values[idx];
+        }
+        if (json_get_string(val, "fill", float_str, sizeof(float_str))) {
+            bb->fill = atof(float_str) / 100.0f;
         }
     }
 }
@@ -618,9 +656,22 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         else if (bb->length == 2.0f) len_idx = 3;
         else if (bb->length == 4.0f) len_idx = 4;
         else if (bb->length == 8.0f) len_idx = 5;
-        
-        return snprintf(buf, buf_len, "{\"preset\":%d,\"loop\":%d,\"length\":%d,\"complexity\":%d,\"retrigger\":%d,\"retrigger_rate\":%d}",
-            bb->preset_idx, bb->loop_idx, len_idx, (int)(bb->complexity * 100.0f), (int)(bb->retrigger_prob * 100.0f), bb->retrigger_divisions);
+
+        int phrase_idx = 0;
+        if (bb->phrase_bars == 2) phrase_idx = 1;
+        else if (bb->phrase_bars == 4) phrase_idx = 2;
+        else if (bb->phrase_bars == 8) phrase_idx = 3;
+        else if (bb->phrase_bars == 16) phrase_idx = 4;
+
+        return snprintf(buf, buf_len, "{\"preset\":%d,\"loop\":%d,\"length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,\"retrigger\":%d,\"retrigger_rate\":%d}",
+            bb->preset_idx, bb->loop_idx, len_idx,
+            (int)(bb->complexity * 100.0f),
+            (int)(bb->anchor * 100.0f),
+            (int)(bb->roll * 100.0f),
+            phrase_idx,
+            (int)(bb->fill * 100.0f),
+            (int)(bb->retrigger_prob * 100.0f),
+            bb->retrigger_divisions);
     }
     
     return -1;
