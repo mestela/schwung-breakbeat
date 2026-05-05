@@ -57,6 +57,58 @@ int main(void) {
         }
     }
 
+    /* === apply_phrase: phrase_bars=0 → no modulation === */
+    {
+        slice_inputs_t in = {0};
+        in.complexity = 0.5f; in.anchor = 0.7f; in.roll = 0.3f;
+        in.phrase_bars = 0; in.fill = 1.0f; in.bar_in_phrase = 0;
+
+        float c, a, r;
+        slice_select_apply_phrase(&in, &c, &a, &r);
+        ASSERT_NEAR(c, 0.5f, 1e-5f, "phrase off: complexity unchanged");
+        ASSERT_NEAR(a, 0.7f, 1e-5f, "phrase off: anchor unchanged");
+        ASSERT_NEAR(r, 0.3f, 1e-5f, "phrase off: roll unchanged");
+    }
+
+    /* === apply_phrase: bar 0 of 4-bar phrase → no modulation === */
+    {
+        slice_inputs_t in = {0};
+        in.complexity = 0.5f; in.anchor = 0.7f; in.roll = 0.3f;
+        in.phrase_bars = 4; in.fill = 1.0f; in.bar_in_phrase = 0;
+
+        float c, a, r;
+        slice_select_apply_phrase(&in, &c, &a, &r);
+        ASSERT_NEAR(c, 0.5f, 1e-5f, "non-fill bar: complexity unchanged");
+        ASSERT_NEAR(a, 0.7f, 1e-5f, "non-fill bar: anchor unchanged");
+        ASSERT_NEAR(r, 0.3f, 1e-5f, "non-fill bar: roll unchanged");
+    }
+
+    /* === apply_phrase: fill bar (bar 3 of 4) with Fill=1 === */
+    {
+        slice_inputs_t in = {0};
+        in.complexity = 0.5f; in.anchor = 0.7f; in.roll = 0.3f;
+        in.phrase_bars = 4; in.fill = 1.0f; in.bar_in_phrase = 3;
+
+        float c, a, r;
+        slice_select_apply_phrase(&in, &c, &a, &r);
+        ASSERT_NEAR(c, 1.0f, 1e-5f, "fill=1: complexity → 1.0");
+        ASSERT_NEAR(a, 0.0f, 1e-5f, "fill=1: anchor → 0");
+        ASSERT_NEAR(r, 0.0f, 1e-5f, "fill=1: roll → 0");
+    }
+
+    /* === apply_phrase: fill bar with Fill=0.5 → halfway === */
+    {
+        slice_inputs_t in = {0};
+        in.complexity = 0.5f; in.anchor = 0.8f; in.roll = 0.6f;
+        in.phrase_bars = 4; in.fill = 0.5f; in.bar_in_phrase = 3;
+
+        float c, a, r;
+        slice_select_apply_phrase(&in, &c, &a, &r);
+        ASSERT_NEAR(c, 0.75f, 1e-5f, "fill=0.5: complexity halfway to 1.0");
+        ASSERT_NEAR(a, 0.4f,  1e-5f, "fill=0.5: anchor halved");
+        ASSERT_NEAR(r, 0.3f,  1e-5f, "fill=0.5: roll halved");
+    }
+
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

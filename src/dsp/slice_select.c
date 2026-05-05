@@ -16,6 +16,18 @@ void slice_select_apply_phrase(const slice_inputs_t *in,
     *out_complexity = in->complexity;
     *out_anchor = in->anchor;
     *out_roll = in->roll;
+
+    if (in->phrase_bars <= 0) return;
+    int is_fill = (in->bar_in_phrase == in->phrase_bars - 1);
+    if (!is_fill) return;
+
+    float f = in->fill;
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+
+    *out_complexity = in->complexity + (1.0f - in->complexity) * f;
+    *out_anchor     = in->anchor * (1.0f - f);
+    *out_roll       = in->roll   * (1.0f - f);
 }
 
 int slice_select_next(const slice_inputs_t *in, slice_rand_fn rand_fn, void *rand_ctx) {
