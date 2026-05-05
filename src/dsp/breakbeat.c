@@ -444,6 +444,28 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->complexity < 0.0f) bb->complexity = 0.0f;
         if (bb->complexity > 1.0f) bb->complexity = 1.0f;
     }
+    else if (strcmp(key, "anchor") == 0) {
+        bb->anchor = atof(val) / 100.0f;
+        if (bb->anchor < 0.0f) bb->anchor = 0.0f;
+        if (bb->anchor > 1.0f) bb->anchor = 1.0f;
+    }
+    else if (strcmp(key, "roll") == 0) {
+        bb->roll = atof(val) / 100.0f;
+        if (bb->roll < 0.0f) bb->roll = 0.0f;
+        if (bb->roll > 1.0f) bb->roll = 1.0f;
+    }
+    else if (strcmp(key, "phrase") == 0) {
+        int idx = atoi(val);
+        static const int phrase_values[] = {0, 2, 4, 8, 16};
+        if (idx < 0) idx = 0;
+        if (idx > 4) idx = 4;
+        bb->phrase_bars = phrase_values[idx];
+    }
+    else if (strcmp(key, "fill") == 0) {
+        bb->fill = atof(val) / 100.0f;
+        if (bb->fill < 0.0f) bb->fill = 0.0f;
+        if (bb->fill > 1.0f) bb->fill = 1.0f;
+    }
     else if (strcmp(key, "retrigger") == 0) {
         bb->retrigger_prob = atof(val) / 100.0f;
         if (bb->retrigger_prob < 0.0f) bb->retrigger_prob = 0.0f;
