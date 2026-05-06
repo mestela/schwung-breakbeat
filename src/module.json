@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "BB Gen",
   "abbrev": "BB",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -29,22 +29,20 @@
               "default": 0
             },
             {
-              "key": "loop",
-              "label": "Loop",
-              "type": "enum",
-              "options": [
-                "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
-              ],
-              "default": 0
+              "key": "sample_path",
+              "label": "Sample",
+              "type": "filepath",
+              "root": "/data/UserData/breakbeat-samples",
+              "filter": ".wav",
+              "default": "/data/UserData/breakbeat-samples/Built-in/amen.wav"
             },
             {
-              "key": "alt_loop",
-              "label": "Alt Loop",
-              "type": "enum",
-              "options": [
-                "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
-              ],
-              "default": 1
+              "key": "alt_sample_path",
+              "label": "Alt Sample",
+              "type": "filepath",
+              "root": "/data/UserData/breakbeat-samples",
+              "filter": ".wav",
+              "default": "/data/UserData/breakbeat-samples/Built-in/amen09.wav"
             },
             {
               "key": "length",
@@ -125,8 +123,8 @@
           ],
           "knobs": [
             "preset",
-            "loop",
-            "alt_loop",
+            "sample_path",
+            "alt_sample_path",
             "length",
             "phrase",
             "complexity",
