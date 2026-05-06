@@ -743,6 +743,9 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (json_get_string(val, "sample_path", path_str, sizeof(path_str))) {
             resolve_sample_path(bb->module_dir, path_str, bb->main_sample_path, sizeof(bb->main_sample_path));
             snprintf(bb->pending_sample_path, sizeof(bb->pending_sample_path), "%s", bb->main_sample_path);
+            char dbg[BB_PATH_MAX + 64];
+            snprintf(dbg, sizeof(dbg), "breakbeat: state restore sample_path=%s", bb->main_sample_path);
+            wp_log(dbg);
         } else {
             char loop_str[64];
             if (json_get_string(val, "loop", loop_str, sizeof(loop_str))) {
@@ -846,7 +849,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     
 
     if (strcmp(key, "ui_hierarchy") == 0) {
-        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"sample_path\",\"alt_sample_path\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"swap_prob\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"sample_path\",\"label\":\"Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"alt_sample_path\",\"label\":\"Alt Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"swap_prob\",\"label\":\"Swap Prob\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
+        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"sample_path\",\"alt_sample_path\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"swap_prob\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"sample_path\",\"label\":\"Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"alt_sample_path\",\"label\":\"Alt Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"swap_prob\",\"label\":\"Swap Prob\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
         strncpy(buf, hierarchy, buf_len);
         return strlen(hierarchy);
     }
@@ -855,7 +858,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"key\":\"preset\",\"name\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
             "{\"key\":\"sample_path\",\"name\":\"Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},"
             "{\"key\":\"alt_sample_path\",\"name\":\"Alt Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},"
-            "{\"key\":\"length\",\"name\":\"Length\",\"type\":\"enum\",\"options\":[\"0.25\",\"0.5\",\"1\",\"2\",\"4\",\"8\"]},"
+            "{\"key\":\"length\",\"name\":\"Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
             "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
             "{\"key\":\"complexity\",\"name\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"anchor\",\"name\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
@@ -879,6 +882,9 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len, "%s", g_presets[bb->preset_idx].name);
     }
     else if (strcmp(key, "sample_path") == 0 || strcmp(key, "loop") == 0) {
+        char dbg[BB_PATH_MAX + 64];
+        snprintf(dbg, sizeof(dbg), "breakbeat: get_param sample_path -> %s", bb->main_sample_path);
+        wp_log(dbg);
         return snprintf(buf, buf_len, "%s", bb->main_sample_path);
     }
     else if (strcmp(key, "length") == 0) {

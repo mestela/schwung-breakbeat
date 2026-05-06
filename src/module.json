@@ -49,12 +49,12 @@
               "label": "Length",
               "type": "enum",
               "options": [
-                "0.25",
-                "0.5",
-                "1",
-                "2",
-                "4",
-                "8"
+                "1/4 bar",
+                "1/2 bar",
+                "1 bar",
+                "2 bars",
+                "4 bars",
+                "8 bars"
               ],
               "default": 2
             },
