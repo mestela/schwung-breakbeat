@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include "plugin_api_v1.h"
 #include "slice_select.h"
 #include <time.h>
@@ -60,47 +61,56 @@ typedef struct {
     uint64_t last_clock_samples;
     float calculated_bpm;
     float swap_prob;
+    float alt_length;
+    float main_length;
+    
+    int alt_loop_idx;
+    int main_loop_idx;
+    
+    int loop_clock_counter;
+    char current_loop;
+    char status_str[32];
 
 } breakbeat_t;
 
 static const host_api_v1_t *g_host = NULL;
-static int g_num_presets = 3; // Stub
+static char g_preset_filenames[32][64];
+static int g_total_presets = 0;
 
-typedef struct {
-    char name[64];
-    const char *sample_path;     /* relative to module_dir, or absolute */
-    const char *alt_sample_path; /* relative to module_dir, or absolute */
-    float length;
-    float complexity;
-    float retrigger_prob;
-    int retrigger_divisions;
-    float anchor;
-    float roll;
-    int phrase_bars;
-    float fill;
-} preset_t;
+static void wp_log(const char *msg) {
+    if (g_host && g_host->log) g_host->log(msg);
+}
 
-static preset_t g_presets[] = {
-    /* name, sample, alt_sample, length, cplx, retrig, ratediv, anchor, roll, phrase, fill */
-    {"Calm",    "/data/UserData/breakbeat-samples/Built-in/amen01.wav",
-                "/data/UserData/breakbeat-samples/Built-in/amen09.wav",  0.5f,  0.18f, 0.16f, 2,  0.80f, 0.70f, 4, 0.50f},
-    {"Mid",     "/data/UserData/breakbeat-samples/Built-in/amen09.wav",
-                "/data/UserData/breakbeat-samples/Built-in/amen18.wav",  0.5f,  0.56f, 0.08f, 4,  0.60f, 0.50f, 4, 0.60f},
-    {"Frantic", "/data/UserData/breakbeat-samples/Built-in/sesame.wav",
-                "/data/UserData/breakbeat-samples/Built-in/think.wav",   0.25f, 0.80f, 0.11f, 4,  0.30f, 0.20f, 2, 0.80f}
-};
-
-static const char *g_loop_names[] = {
-    "amen01", "amen09", "amen18", "amen19", "amen20", "apache", "do", "eeloil", "fireeater", "funkydrummer", "groove", "hungup_0", "king", "kool", "mechanicalman", "neworleans", "riffin", "ripple", "sesame", "sport", "squib", "think", "useme"
-};
+static void scan_presets(const char *module_dir) {
+    g_total_presets = 0;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/presets", module_dir);
+    
+    DIR *dir = opendir(path);
+    if (!dir) {
+        wp_log("breakbeat: failed to open presets dir");
+        return;
+    }
+    
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && g_total_presets < 32) {
+        const char *ext = strrchr(entry->d_name, '.');
+        if (ext && strcmp(ext, ".json") == 0) {
+            strncpy(g_preset_filenames[g_total_presets], entry->d_name, 63);
+            g_preset_filenames[g_total_presets][63] = '\0';
+            g_total_presets++;
+        }
+    }
+    closedir(dir);
+    
+    char dbg[64];
+    snprintf(dbg, sizeof(dbg), "breakbeat: found %d presets", g_total_presets);
+    wp_log(dbg);
+}
 
 static float bb_rand(void *ctx) {
     (void)ctx;
     return (float)rand() / (float)RAND_MAX;
-}
-
-static void wp_log(const char *msg) {
-    if (g_host && g_host->log) g_host->log(msg);
 }
 
 /* JSON helpers for state parsing */
@@ -135,6 +145,35 @@ static int json_get_int(const char *json, const char *key, int *out) {
     colon++;
     while (*colon && (*colon == ' ' || *colon == '\t')) colon++;
     *out = atoi(colon);
+    return 1;
+}
+
+static char* read_file_to_string(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = (char*)malloc(size + 1);
+    if (buf) {
+        fread(buf, 1, size, f);
+        buf[size] = '\0';
+    }
+    fclose(f);
+    return buf;
+}
+
+static int json_get_float(const char *json, const char *key, float *out) {
+    if (!json || !key || !out) return 0;
+    char search[64];
+    snprintf(search, sizeof(search), "\"%s\"", key);
+    const char *pos = strstr(json, search);
+    if (!pos) return 0;
+    const char *colon = strchr(pos, ':');
+    if (!colon) return 0;
+    colon++;
+    while (*colon && (*colon == ' ' || *colon == '\t')) colon++;
+    *out = atof(colon);
     return 1;
 }
 
@@ -175,10 +214,8 @@ static void resolve_sample_path(const char *module_dir, const char *path, char *
     if (!path || !path[0]) { if (out_len > 0) out[0] = '\0'; return; }
     if (path[0] == '/') {
         snprintf(out, out_len, "%s", path);
-    } else if (module_dir && module_dir[0]) {
-        snprintf(out, out_len, "%s/%s", module_dir, path);
     } else {
-        snprintf(out, out_len, "%s", path);
+        snprintf(out, out_len, "/data/UserData/breakbeat-samples/%s", path);
     }
 }
 
@@ -218,7 +255,7 @@ static void ensure_portal_exists(const char *module_dir) {
 
 /* Open and validate a WAV file before destroying the previously-loaded one.
  * On any failure, returns -1 and leaves wp's existing sample state untouched. */
-static int open_wav(breakbeat_t *wp, const char *path) {
+static int open_wav(breakbeat_t *wp, const char *path, float expected_length) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
         wp_log("breakbeat: failed to open file");
@@ -321,6 +358,10 @@ static int open_wav(breakbeat_t *wp, const char *path) {
     wp->total_frames = data_size / (num_channels * bytes_per_sample);
     wp->play_pos = 0;
 
+    float seconds = (float)wp->total_frames / 44100.0f;
+    float beats = 4.0f * expected_length;
+    wp->original_bpm = (beats * 60.0f) / seconds;
+
     uint32_t slice_size = wp->total_frames / 8;
     for (int i = 0; i < 8; i++) {
         wp->slice_starts[i] = i * slice_size;
@@ -338,7 +379,7 @@ static int open_wav(breakbeat_t *wp, const char *path) {
 }
 
 /* Load the sample at `path` (relative or absolute). Returns 0 on success. */
-static int apply_sample_path(breakbeat_t *bb, const char *path) {
+static int apply_sample_path(breakbeat_t *bb, const char *path, float expected_length) {
     if (!bb || !path || !path[0]) return -1;
     if (!has_wav_ext(path)) {
         char buf[BB_PATH_MAX + 64];
@@ -353,15 +394,10 @@ static int apply_sample_path(breakbeat_t *bb, const char *path) {
     snprintf(log_buf, sizeof(log_buf), "breakbeat: applying sample %s", resolved);
     wp_log(log_buf);
 
-    return open_wav(bb, resolved);
+    return open_wav(bb, resolved, expected_length);
 }
 
-/* Legacy migration: old loop_idx (0..22) → "samples/<name>.wav". */
-static int legacy_idx_to_path(int idx, char *out, int out_len) {
-    if (idx < 0 || idx >= 23 || !out || out_len < 1) return -1;
-    snprintf(out, out_len, "samples/%s.wav", g_loop_names[idx]);
-    return 0;
-}
+
 
 static void* bb_create_instance(const char *module_dir, const char *json_defaults) {
     (void)json_defaults;
@@ -375,6 +411,11 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->retrigger_divisions = 2;
     bb->retrigger_rate_idx = 0;
     bb->length = 1.0f;
+    bb->main_length = 1.0f;
+    bb->alt_length = 1.0f;
+    bb->current_loop = 'A';
+    bb->loop_clock_counter = 0;
+    strcpy(bb->status_str, "A_0_1x");
     bb->sample_counter = 0;
     bb->last_clock_samples = 0;
     bb->calculated_bpm = 150.0f; // Default fallback
@@ -399,6 +440,8 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
 
     /* Set up the filepath browser portal (Built-in + User Library symlinks). */
     ensure_portal_exists(bb->module_dir);
+    
+    scan_presets(bb->module_dir);
 
     /* Defaults point at the install-time portal symlinks, so the filepath
      * browser opens inside the Built-in samples folder on first use. */
@@ -410,9 +453,8 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
 
     if (g_host && g_host->log) g_host->log("breakbeat: instance created");
 
-    apply_sample_path(bb, bb->main_sample_path);
+    apply_sample_path(bb, bb->main_sample_path, bb->main_length);
     bb->playing = 1; // Auto-play
-    bb->original_bpm = 137.7f; // Approx for Amen
 
     return bb;
 }
@@ -432,12 +474,14 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     if (msg[0] == 0xFA || msg[0] == 0xFB) {
         bb->clock_counter = 0;
         bb->bar_counter = 0;
+        bb->loop_clock_counter = 0;
         return;
     }
     
     // Handle MIDI Clock
     if (msg[0] == 0xF8) {
         bb->clock_counter++;
+        bb->loop_clock_counter++;
         if (bb->clock_counter % 96 == 0 && bb->clock_counter > 0) {
             bb->bar_counter++;
         }
@@ -460,28 +504,34 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
                 if ((float)rand() / (float)RAND_MAX < bb->swap_prob) {
                     snprintf(bb->pending_sample_path, sizeof(bb->pending_sample_path),
                              "%s", bb->alt_sample_path);
+                    bb->current_loop = 'B';
+                    bb->loop_clock_counter = -1;
                 }
             } else if (bar_in_phrase == 0) {
                 snprintf(bb->pending_sample_path, sizeof(bb->pending_sample_path),
                          "%s", bb->main_sample_path);
+                bb->current_loop = 'A';
+                bb->loop_clock_counter = -1;
             }
         }
 
         // Deferred sample loading at start of bar (every 96 clocks = 4 beats)
         if (bb->clock_counter % 96 == 0 && bb->pending_sample_path[0]) {
-            apply_sample_path(bb, bb->pending_sample_path);
+            float len = bb->main_length;
+            if (strcmp(bb->pending_sample_path, bb->alt_sample_path) == 0) {
+                len = bb->alt_length;
+            }
+            apply_sample_path(bb, bb->pending_sample_path, len);
             bb->pending_sample_path[0] = '\0';
         }
         
         // Dynamic trigger interval based on length!
-        int trigger_clocks = (int)(48.0f * bb->length);
-        if (trigger_clocks < 6) trigger_clocks = 6; // Min 16th note resolution
+        float current_len = (bb->current_loop == 'A') ? bb->main_length : bb->alt_length;
+        int trigger_clocks = (int)(12.0f * current_len);
+        if (trigger_clocks < 1) trigger_clocks = 1;
         
-        if (bb->clock_counter % trigger_clocks == 0) {
-            int trigger_in_bar = (bb->clock_counter % 96) / trigger_clocks;
-            int triggers_per_bar = 96 / trigger_clocks;
-            if (triggers_per_bar < 1) triggers_per_bar = 1;
-            int beat_position = (int)((float)trigger_in_bar * (8.0f / (float)triggers_per_bar)) & 7;
+        if (bb->loop_clock_counter % trigger_clocks == 0) {
+            int beat_position = (bb->loop_clock_counter / trigger_clocks) % 8;
 
             slice_inputs_t in = {
                 .current_slice = bb->current_slice,
@@ -493,7 +543,11 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
                 .fill          = bb->fill,
                 .bar_in_phrase = bb->phrase_bars > 0 ? bb->bar_counter % bb->phrase_bars : 0,
             };
-            bb->current_slice = slice_select_next(&in, bb_rand, NULL);
+            if (bb->complexity == 0.0f) {
+                bb->current_slice = beat_position;
+            } else {
+                bb->current_slice = slice_select_next(&in, bb_rand, NULL);
+            }
 
             bb->sub_slice_counter = 0;
             if ((float)rand() / (float)RAND_MAX < bb->retrigger_prob) {
@@ -510,6 +564,10 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             } else {
                 bb->sub_slice_active = 0;
             }
+
+            int div = bb->sub_slice_active ? bb->retrigger_divisions : 1;
+            snprintf(bb->status_str, sizeof(bb->status_str), "%c_%d_%dx", 
+                     bb->current_loop, bb->current_slice, div);
 
             bb->play_pos = bb->slice_starts[bb->current_slice];
         }
@@ -550,21 +608,116 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
     
     if (strcmp(key, "preset") == 0 || strcmp(key, "preset_index") == 0) {
         bb->preset_idx = atoi(val);
+        
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "breakbeat: set preset=%d, total=%d", bb->preset_idx, g_total_presets);
+        wp_log(dbg);
+        
         if (bb->preset_idx < 0) bb->preset_idx = 0;
-        if (bb->preset_idx >= g_num_presets) bb->preset_idx = g_num_presets - 1;
+        if (bb->preset_idx >= g_total_presets) bb->preset_idx = g_total_presets - 1;
+        
+        if (g_total_presets == 0) return;
+        
+        char path[512];
+        snprintf(path, sizeof(path), "%s/presets/%s", bb->module_dir, g_preset_filenames[bb->preset_idx]);
+        
+        char *json = read_file_to_string(path);
+        if (json) {
+            char str_val[256];
+            float fval;
+            int ival;
+            
+            if (json_get_string(json, "A_sample_path", str_val, sizeof(str_val))) {
+                resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
+            } else if (json_get_string(json, "sample_path", str_val, sizeof(str_val))) {
+                resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
+            }
+            
+            if (json_get_string(json, "B_sample_path", str_val, sizeof(str_val))) {
+                resolve_sample_path(bb->module_dir, str_val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
+            } else if (json_get_string(json, "alt_sample_path", str_val, sizeof(str_val))) {
+                resolve_sample_path(bb->module_dir, str_val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
+            }
+            
+            if (json_get_string(json, "A_sample_length", str_val, sizeof(str_val))) {
+                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
+                float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+                for (int i = 0; i < 6; i++) {
+                    if (strcmp(lengths[i], str_val) == 0) {
+                        bb->length = length_vals[i];
+                        bb->main_length = length_vals[i];
+                        break;
+                    }
+                }
+            } else if (json_get_string(json, "length", str_val, sizeof(str_val))) {
+                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
+                float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+                for (int i = 0; i < 6; i++) {
+                    if (strcmp(lengths[i], str_val) == 0) {
+                        bb->length = length_vals[i];
+                        bb->main_length = length_vals[i];
+                        break;
+                    }
+                }
+            }
+            
+            if (json_get_string(json, "B_sample_length", str_val, sizeof(str_val))) {
+                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
+                float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+                for (int i = 0; i < 6; i++) {
+                    if (strcmp(lengths[i], str_val) == 0) {
+                        bb->alt_length = length_vals[i];
+                        break;
+                    }
+                }
+            }
+            if (json_get_float(json, "complexity", &fval)) bb->complexity = fval / 100.0f;
+            if (json_get_float(json, "anchor", &fval)) bb->anchor = fval / 100.0f;
+            if (json_get_float(json, "roll", &fval)) bb->roll = fval / 100.0f;
+            if (json_get_string(json, "phrase", str_val, sizeof(str_val))) {
+                const char *phrases[] = {"Off", "2 bars", "4 bars", "8 bars", "16 bars"};
+                static const int phrase_values[] = {0, 2, 4, 8, 16};
+                for (int i = 0; i < 5; i++) {
+                    if (strcmp(phrases[i], str_val) == 0) {
+                        bb->phrase_bars = phrase_values[i];
+                        break;
+                    }
+                }
+            } else if (json_get_int(json, "phrase", &ival)) {
+                static const int phrase_values[] = {0, 2, 4, 8, 16};
+                if (ival >= 0 && ival < 5) bb->phrase_bars = phrase_values[ival];
+            }
+            if (json_get_float(json, "fill", &fval)) bb->fill = fval / 100.0f;
+            if (json_get_float(json, "retrigger", &fval)) bb->retrigger_prob = fval / 100.0f;
+            if (json_get_int(json, "retrigger_rate", &ival)) {
+                bb->retrigger_rate_idx = ival;
+                if (ival == 0) bb->retrigger_divisions = 2;
+                else if (ival == 1) bb->retrigger_divisions = 3;
+                else if (ival == 2) bb->retrigger_divisions = 4;
+                else if (ival == 3) bb->retrigger_divisions = 8;
+            }
+            if (json_get_int(json, "B_chance", &ival)) {
+                bb->swap_prob = (float)ival / 100.0f;
+            } else if (json_get_float(json, "swap_prob", &fval)) {
+                bb->swap_prob = fval / 100.0f;
+            }
+            
+            if (json_get_string(json, "retrigger_rate", str_val, sizeof(str_val))) {
+                const char *rates[] = {"2x", "3x", "4x", "8x", "Rand"};
+                for (int i = 0; i < 5; i++) {
+                    if (strcmp(rates[i], str_val) == 0) {
+                        bb->retrigger_rate_idx = i;
+                        if (i == 0) bb->retrigger_divisions = 2;
+                        else if (i == 1) bb->retrigger_divisions = 3;
+                        else if (i == 2) bb->retrigger_divisions = 4;
+                        else if (i == 3) bb->retrigger_divisions = 8;
+                        break;
+                    }
+                }
+            }
 
-        preset_t *p = &g_presets[bb->preset_idx];
-        bb->length = p->length;
-        bb->complexity = p->complexity;
-        bb->retrigger_prob = p->retrigger_prob;
-        bb->retrigger_divisions = p->retrigger_divisions;
-        bb->anchor = p->anchor;
-        bb->roll = p->roll;
-        bb->phrase_bars = p->phrase_bars;
-        bb->fill = p->fill;
-
-        resolve_sample_path(bb->module_dir, p->sample_path,     bb->main_sample_path, sizeof(bb->main_sample_path));
-        resolve_sample_path(bb->module_dir, p->alt_sample_path, bb->alt_sample_path,  sizeof(bb->alt_sample_path));
+            free(json);
+        }
 
         int is_running = 0;
         if (g_host && g_host->get_clock_status) {
@@ -572,36 +725,15 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         }
 
         if (!is_running) {
-            apply_sample_path(bb, bb->main_sample_path);
+            apply_sample_path(bb, bb->main_sample_path, bb->main_length);
             bb->pending_sample_path[0] = '\0';
         } else {
             snprintf(bb->pending_sample_path, sizeof(bb->pending_sample_path),
                      "%s", bb->main_sample_path);
         }
     }
-    else if (strcmp(key, "sample_path") == 0 || strcmp(key, "loop") == 0) {
-        /* New filepath browser sends sample_path; legacy state may send loop
-         * as a numeric index or sample name. Translate either way to a path. */
-        char raw[BB_PATH_MAX];
-        raw[0] = '\0';
-        if (strcmp(key, "loop") == 0) {
-            int found = 0;
-            for (int i = 0; i < 23; i++) {
-                if (strcmp(g_loop_names[i], val) == 0) {
-                    legacy_idx_to_path(i, raw, sizeof(raw));
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found && val[0] >= '0' && val[0] <= '9') {
-                legacy_idx_to_path(atoi(val), raw, sizeof(raw));
-            }
-        } else {
-            snprintf(raw, sizeof(raw), "%s", val);
-        }
-        if (!raw[0]) return;
-
-        resolve_sample_path(bb->module_dir, raw, bb->main_sample_path, sizeof(bb->main_sample_path));
+    else if (strcmp(key, "A_sample_path") == 0) {
+        resolve_sample_path(bb->module_dir, val, bb->main_sample_path, sizeof(bb->main_sample_path));
 
         int is_running = 0;
         if (g_host && g_host->get_clock_status) {
@@ -609,40 +741,41 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         }
 
         if (!is_running) {
-            apply_sample_path(bb, bb->main_sample_path);
+            apply_sample_path(bb, bb->main_sample_path, bb->main_length);
             bb->pending_sample_path[0] = '\0';
         } else {
             snprintf(bb->pending_sample_path, sizeof(bb->pending_sample_path),
                      "%s", bb->main_sample_path);
         }
     }
-    else if (strcmp(key, "alt_sample_path") == 0 || strcmp(key, "alt_loop") == 0) {
-        char raw[BB_PATH_MAX];
-        raw[0] = '\0';
-        if (strcmp(key, "alt_loop") == 0) {
-            int found = 0;
-            for (int i = 0; i < 23; i++) {
-                if (strcmp(g_loop_names[i], val) == 0) {
-                    legacy_idx_to_path(i, raw, sizeof(raw));
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found && val[0] >= '0' && val[0] <= '9') {
-                legacy_idx_to_path(atoi(val), raw, sizeof(raw));
-            }
-        } else {
-            snprintf(raw, sizeof(raw), "%s", val);
-        }
-        if (raw[0]) {
-            resolve_sample_path(bb->module_dir, raw, bb->alt_sample_path, sizeof(bb->alt_sample_path));
-        }
+    else if (strcmp(key, "B_sample_path") == 0) {
+        resolve_sample_path(bb->module_dir, val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
     }
-    else if (strcmp(key, "length") == 0) {
+    else if (strcmp(key, "A_sample_length") == 0 || strcmp(key, "length") == 0) {
         int idx = atoi(val);
         float lengths[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
         if (idx >= 0 && idx < 6) {
             bb->length = lengths[idx];
+            bb->main_length = lengths[idx];
+            
+            if (bb->current_loop == 'A' && bb->total_frames > 0) {
+                float seconds = (float)bb->total_frames / 44100.0f;
+                float beats = 4.0f * bb->main_length;
+                bb->original_bpm = (beats * 60.0f) / seconds;
+            }
+        }
+    }
+    else if (strcmp(key, "B_sample_length") == 0 || strcmp(key, "alt_length") == 0) {
+        int idx = atoi(val);
+        float lengths[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+        if (idx >= 0 && idx < 6) {
+            bb->alt_length = lengths[idx];
+            
+            if (bb->current_loop == 'B' && bb->total_frames > 0) {
+                float seconds = (float)bb->total_frames / 44100.0f;
+                float beats = 4.0f * bb->alt_length;
+                bb->original_bpm = (beats * 60.0f) / seconds;
+            }
         }
     }
     else if (strcmp(key, "complexity") == 0) {
@@ -697,15 +830,14 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         else if (idx == 2) bb->retrigger_divisions = 4;
         else if (idx == 3) bb->retrigger_divisions = 8;
     }
-    else if (strcmp(key, "swap_prob") == 0) {
+    else if (strcmp(key, "B_chance") == 0) {
         bb->swap_prob = atof(val) / 100.0f;
         if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
         if (bb->swap_prob > 1.0f) bb->swap_prob = 1.0f;
     }
     else if (strcmp(key, "save_preset") == 0) {
         int trigger = atoi(val);
-        if (trigger == 1 && g_host && g_host->log) {
-            char buf[1536];
+        if (trigger == 1) {
             int len_idx = 2;
             if (bb->length == 0.25f) len_idx = 0;
             else if (bb->length == 0.5f) len_idx = 1;
@@ -720,25 +852,67 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             else if (bb->phrase_bars == 8) phrase_idx = 3;
             else if (bb->phrase_bars == 16) phrase_idx = 4;
 
-            snprintf(buf, sizeof(buf), "PRESET_DATA: {\"name\":\"%s\",\"sample_path\":\"%s\",\"alt_sample_path\":\"%s\",\"length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,\"retrigger\":%d,\"retrigger_rate\":%d}",
-                g_presets[bb->preset_idx].name,
-                bb->main_sample_path,
-                bb->alt_sample_path,
-                len_idx,
-                (int)(bb->complexity * 100.0f),
-                (int)(bb->anchor * 100.0f),
-                (int)(bb->roll * 100.0f),
-                phrase_idx,
-                (int)(bb->fill * 100.0f),
-                (int)(bb->retrigger_prob * 100.0f),
-                bb->retrigger_divisions);
-            g_host->log(buf);
+            int n = 4;
+            char filename[64];
+            char path[512];
+            while (n < 100) {
+                snprintf(filename, sizeof(filename), "%d_preset.json", n);
+                snprintf(path, sizeof(path), "%s/presets/%s", bb->module_dir, filename);
+                if (access(path, F_OK) == -1) {
+                    break;
+                }
+                n++;
+            }
+
+            FILE *f = fopen(path, "w");
+            if (f) {
+                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
+                const char *phrases[] = {"Off", "2 bars", "4 bars", "8 bars", "16 bars"};
+                const char *rates[] = {"2x", "3x", "4x", "8x", "Rand"};
+                
+                int alt_len_idx = 2;
+                if (bb->alt_length == 0.25f) alt_len_idx = 0;
+                else if (bb->alt_length == 0.5f) alt_len_idx = 1;
+                else if (bb->alt_length == 1.0f) alt_len_idx = 2;
+                else if (bb->alt_length == 2.0f) alt_len_idx = 3;
+                else if (bb->alt_length == 4.0f) alt_len_idx = 4;
+                else if (bb->alt_length == 8.0f) alt_len_idx = 5;
+                
+                fprintf(f, "{\n");
+                fprintf(f, "  \"name\": \"Preset %d\",\n", n);
+                fprintf(f, "  \"A_sample_path\": \"%s\",\n", bb->main_sample_path);
+                fprintf(f, "  \"A_sample_length\": \"%s\",\n", lengths[len_idx]);
+                fprintf(f, "  \"B_sample_path\": \"%s\",\n", bb->alt_sample_path);
+                fprintf(f, "  \"B_sample_length\": \"%s\",\n", lengths[alt_len_idx]);
+                fprintf(f, "  \"B_chance\": %d,\n", (int)(bb->swap_prob * 100.0f));
+                fprintf(f, "  \"complexity\": %d,\n", (int)(bb->complexity * 100.0f));
+                fprintf(f, "  \"phrase\": \"%s\",\n", phrases[phrase_idx]);
+                fprintf(f, "  \"anchor\": %d,\n", (int)(bb->anchor * 100.0f));
+                fprintf(f, "  \"roll\": %d,\n", (int)(bb->roll * 100.0f));
+                fprintf(f, "  \"fill\": %d,\n", (int)(bb->fill * 100.0f));
+                fprintf(f, "  \"retrigger\": %d,\n", (int)(bb->retrigger_prob * 100.0f));
+                fprintf(f, "  \"retrigger_rate\": \"%s\"\n", rates[bb->retrigger_rate_idx]);
+                fprintf(f, "}\n");
+                fclose(f);
+                
+                wp_log("breakbeat: saved preset file");
+                
+                // Rescan presets!
+                scan_presets(bb->module_dir);
+            } else {
+                wp_log("breakbeat: failed to save preset file");
+            }
         }
     }
     else if (strcmp(key, "state") == 0) {
         json_get_int(val, "preset_index", &bb->preset_idx);
+        if (g_total_presets > 0) {
+            if (bb->preset_idx < 0) bb->preset_idx = 0;
+            if (bb->preset_idx >= g_total_presets) bb->preset_idx = g_total_presets - 1;
+        } else {
+            bb->preset_idx = 0;
+        }
 
-        /* Prefer new sample_path; fall back to legacy `loop` index/name. */
         char path_str[BB_PATH_MAX];
         if (json_get_string(val, "sample_path", path_str, sizeof(path_str))) {
             resolve_sample_path(bb->module_dir, path_str, bb->main_sample_path, sizeof(bb->main_sample_path));
@@ -746,49 +920,12 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             char dbg[BB_PATH_MAX + 64];
             snprintf(dbg, sizeof(dbg), "breakbeat: state restore sample_path=%s", bb->main_sample_path);
             wp_log(dbg);
-        } else {
-            char loop_str[64];
-            if (json_get_string(val, "loop", loop_str, sizeof(loop_str))) {
-                int idx = -1;
-                for (int i = 0; i < 23; i++) {
-                    if (strcmp(g_loop_names[i], loop_str) == 0) { idx = i; break; }
-                }
-                if (idx < 0 && loop_str[0] >= '0' && loop_str[0] <= '9') {
-                    idx = atoi(loop_str);
-                }
-                if (idx >= 0) {
-                    char p[BB_PATH_MAX];
-                    if (legacy_idx_to_path(idx, p, sizeof(p)) == 0) {
-                        resolve_sample_path(bb->module_dir, p, bb->main_sample_path, sizeof(bb->main_sample_path));
-                        snprintf(bb->pending_sample_path, sizeof(bb->pending_sample_path), "%s", bb->main_sample_path);
-                    }
-                }
-            }
         }
 
         if (json_get_string(val, "alt_sample_path", path_str, sizeof(path_str))) {
             resolve_sample_path(bb->module_dir, path_str, bb->alt_sample_path, sizeof(bb->alt_sample_path));
-        } else {
-            char alt_str[64];
-            if (json_get_string(val, "alt_loop", alt_str, sizeof(alt_str))) {
-                int idx = -1;
-                for (int i = 0; i < 23; i++) {
-                    if (strcmp(g_loop_names[i], alt_str) == 0) { idx = i; break; }
-                }
-                if (idx < 0 && alt_str[0] >= '0' && alt_str[0] <= '9') {
-                    idx = atoi(alt_str);
-                }
-                if (idx >= 0) {
-                    char p[BB_PATH_MAX];
-                    if (legacy_idx_to_path(idx, p, sizeof(p)) == 0) {
-                        resolve_sample_path(bb->module_dir, p, bb->alt_sample_path, sizeof(bb->alt_sample_path));
-                    }
-                }
-            }
         }
 
-        /* Numeric fields are stored UNQUOTED in state JSON, so use
-         * json_get_int (json_get_string would silently fail to find them). */
         int i;
         if (json_get_int(val, "length", &i)) {
             static const float lengths[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
@@ -833,7 +970,6 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             else if (i == 1) bb->retrigger_divisions = 3;
             else if (i == 2) bb->retrigger_divisions = 4;
             else if (i == 3) bb->retrigger_divisions = 8;
-            /* i == 4 (Rand) leaves current divisions; randomized per stutter. */
         }
         if (json_get_int(val, "swap_prob", &i)) {
             bb->swap_prob = (float)i / 100.0f;
@@ -849,45 +985,61 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     
 
     if (strcmp(key, "ui_hierarchy") == 0) {
-        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"sample_path\",\"alt_sample_path\",\"length\",\"phrase\",\"complexity\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"swap_prob\",\"save_preset\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"sample_path\",\"label\":\"Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"alt_sample_path\",\"label\":\"Alt Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"length\",\"label\":\"Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"swap_prob\",\"label\":\"Swap Prob\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"save_preset\",\"label\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}]}}}";
+        const char *hierarchy = "{\"modes\":null,\"levels\":{\"root\":{\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\",\"knobs\":[\"preset\",\"A_sample_path\",\"A_sample_length\",\"B_sample_path\",\"B_sample_length\",\"B_chance\",\"complexity\",\"phrase\",\"anchor\",\"roll\",\"fill\",\"retrigger\",\"retrigger_rate\",\"save_preset\",\"status\"],\"params\":[{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},{\"key\":\"A_sample_path\",\"label\":\"A Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"A_sample_length\",\"label\":\"A Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},{\"key\":\"B_sample_path\",\"label\":\"B Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"B_sample_length\",\"label\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},{\"key\":\"B_chance\",\"label\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger\",\"label\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrigger_rate\",\"label\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},{\"key\":\"save_preset\",\"label\":\"Save Preset\",\"type\":\"int\",\"min\":0,\"max\":1},{\"key\":\"status\",\"label\":\"Status\",\"type\":\"enum\",\"options\":[\"-\"]}]}}}";
         strncpy(buf, hierarchy, buf_len);
         return strlen(hierarchy);
     }
     if (strcmp(key, "chain_params") == 0) {
         const char *json = "["
             "{\"key\":\"preset\",\"name\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
-            "{\"key\":\"sample_path\",\"name\":\"Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},"
-            "{\"key\":\"alt_sample_path\",\"name\":\"Alt Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},"
-            "{\"key\":\"length\",\"name\":\"Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
-            "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
+            "{\"key\":\"A_sample_path\",\"name\":\"A Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},"
+            "{\"key\":\"A_sample_length\",\"name\":\"A Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
+            "{\"key\":\"B_sample_path\",\"name\":\"B Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},"
+            "{\"key\":\"B_sample_length\",\"name\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
+            "{\"key\":\"B_chance\",\"name\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"complexity\",\"name\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
+            "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
             "{\"key\":\"anchor\",\"name\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"roll\",\"name\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"fill\",\"name\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"retrigger\",\"name\":\"Retrigger\",\"type\":\"int\",\"min\":0,\"max\":100},"
             "{\"key\":\"retrigger_rate\",\"name\":\"Retrig Rate\",\"type\":\"enum\",\"options\":[\"2x\",\"3x\",\"4x\",\"8x\",\"Rand\"]},"
-            "{\"key\":\"swap_prob\",\"name\":\"Swap Prob\",\"type\":\"int\",\"min\":0,\"max\":100},"
-            "{\"key\":\"save_preset\",\"name\":\"Save to Log\",\"type\":\"int\",\"min\":0,\"max\":1}"
+            "{\"key\":\"save_preset\",\"name\":\"Save Preset\",\"type\":\"int\",\"min\":0,\"max\":1},"
+            "{\"key\":\"status\",\"name\":\"Status\",\"type\":\"enum\",\"options\":[\"-\"]}"
         "]";
         strncpy(buf, json, buf_len);
         return strlen(json);
     }
     if (strcmp(key, "preset_count") == 0) {
-        return snprintf(buf, buf_len, "%d", g_num_presets);
+        return snprintf(buf, buf_len, "%d", g_total_presets);
     }
     else if (strcmp(key, "preset") == 0 || strcmp(key, "preset_index") == 0) {
         return snprintf(buf, buf_len, "%d", bb->preset_idx);
     }
     else if (strcmp(key, "preset_name") == 0) {
-        return snprintf(buf, buf_len, "%s", g_presets[bb->preset_idx].name);
+        int idx = bb->preset_idx;
+        if (idx >= 0 && idx < g_total_presets) {
+            char name[64];
+            strncpy(name, g_preset_filenames[idx], sizeof(name));
+            char *ext = strrchr(name, '.');
+            if (ext) *ext = '\0'; // Strip .json
+            return snprintf(buf, buf_len, "%s", name);
+        }
+        return snprintf(buf, buf_len, "unknown");
     }
-    else if (strcmp(key, "sample_path") == 0 || strcmp(key, "loop") == 0) {
+    else if (strcmp(key, "save_preset") == 0) {
+        return snprintf(buf, buf_len, "0");
+    }
+    else if (strcmp(key, "status") == 0) {
+        return snprintf(buf, buf_len, "%s", bb->status_str);
+    }
+    else if (strcmp(key, "A_sample_path") == 0 || strcmp(key, "loop") == 0) {
         char dbg[BB_PATH_MAX + 64];
         snprintf(dbg, sizeof(dbg), "breakbeat: get_param sample_path -> %s", bb->main_sample_path);
         wp_log(dbg);
         return snprintf(buf, buf_len, "%s", bb->main_sample_path);
     }
-    else if (strcmp(key, "length") == 0) {
+    else if (strcmp(key, "A_sample_length") == 0) {
         int idx = 2; // Default to 1.0
         if (bb->length == 0.25f) idx = 0;
         else if (bb->length == 0.5f) idx = 1;
@@ -895,6 +1047,16 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         else if (bb->length == 2.0f) idx = 3;
         else if (bb->length == 4.0f) idx = 4;
         else if (bb->length == 8.0f) idx = 5;
+        return snprintf(buf, buf_len, "%d", idx);
+    }
+    else if (strcmp(key, "B_sample_length") == 0) {
+        int idx = 2; // Default to 1.0
+        if (bb->alt_length == 0.25f) idx = 0;
+        else if (bb->alt_length == 0.5f) idx = 1;
+        else if (bb->alt_length == 1.0f) idx = 2;
+        else if (bb->alt_length == 2.0f) idx = 3;
+        else if (bb->alt_length == 4.0f) idx = 4;
+        else if (bb->alt_length == 8.0f) idx = 5;
         return snprintf(buf, buf_len, "%d", idx);
     }
     else if (strcmp(key, "complexity") == 0) {
@@ -914,7 +1076,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         else if (bb->phrase_bars == 16) idx = 4;
         return snprintf(buf, buf_len, "%d", idx);
     }
-    else if (strcmp(key, "alt_sample_path") == 0 || strcmp(key, "alt_loop") == 0) {
+    else if (strcmp(key, "B_sample_path") == 0 || strcmp(key, "alt_loop") == 0) {
         return snprintf(buf, buf_len, "%s", bb->alt_sample_path);
     }
     else if (strcmp(key, "fill") == 0) {
@@ -926,7 +1088,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "retrigger_rate") == 0) {
         return snprintf(buf, buf_len, "%d", bb->retrigger_rate_idx);
     }
-    else if (strcmp(key, "swap_prob") == 0) {
+    else if (strcmp(key, "B_chance") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->swap_prob * 100.0f));
     }
     else if (strcmp(key, "state") == 0) {
@@ -998,9 +1160,9 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
 
     float rate = 1.0f;
     float current_bpm = bb->calculated_bpm;
-    float beats = 16.0f * bb->length; // Assume base length of 4 bars (16 beats)
+    float current_len = (bb->current_loop == 'A') ? bb->main_length : bb->alt_length;
+    float beats = 4.0f * current_len;
     if (beats > 0.0f) {
-        // Rate to fit total_frames into 'beats' at current_bpm
         rate = ((float)bb->total_frames * current_bpm) / (beats * 60.0f * 44100.0f);
     }
     

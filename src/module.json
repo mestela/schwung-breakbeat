@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "BB Gen",
   "abbrev": "BB",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -29,34 +29,46 @@
               "default": 0
             },
             {
-              "key": "sample_path",
-              "label": "Sample",
+              "key": "A_sample_path",
+              "label": "A Sample",
               "type": "filepath",
               "root": "/data/UserData/breakbeat-samples",
               "filter": ".wav",
               "default": "/data/UserData/breakbeat-samples/Built-in/amen.wav"
             },
             {
-              "key": "alt_sample_path",
-              "label": "Alt Sample",
+              "key": "A_sample_length",
+              "label": "A Length",
+              "type": "enum",
+              "options": [
+                "1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"
+              ],
+              "default": 2
+            },
+            {
+              "key": "B_sample_path",
+              "label": "B Sample",
               "type": "filepath",
               "root": "/data/UserData/breakbeat-samples",
               "filter": ".wav",
               "default": "/data/UserData/breakbeat-samples/Built-in/amen09.wav"
             },
             {
-              "key": "length",
-              "label": "Length",
+              "key": "B_sample_length",
+              "label": "B Length",
               "type": "enum",
               "options": [
-                "1/4 bar",
-                "1/2 bar",
-                "1 bar",
-                "2 bars",
-                "4 bars",
-                "8 bars"
+                "1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"
               ],
               "default": 2
+            },
+            {
+              "key": "B_chance",
+              "label": "B Chance",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
             },
             {
               "key": "complexity",
@@ -65,6 +77,13 @@
               "min": 0,
               "max": 100,
               "default": 50
+            },
+            {
+              "key": "phrase",
+              "label": "Phrase",
+              "type": "enum",
+              "options": ["Off", "2 bars", "4 bars", "8 bars", "16 bars"],
+              "default": 0
             },
             {
               "key": "anchor",
@@ -80,13 +99,6 @@
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
-            },
-            {
-              "key": "phrase",
-              "label": "Phrase",
-              "type": "enum",
-              "options": ["Off", "2 bars", "4 bars", "8 bars", "16 bars"],
               "default": 0
             },
             {
@@ -113,27 +125,37 @@
               "default": 0
             },
             {
-              "key": "swap_prob",
-              "label": "Swap Prob",
+              "key": "save_preset",
+              "label": "Save Preset",
               "type": "int",
               "min": 0,
-              "max": 100,
+              "max": 1,
+              "default": 0
+            },
+            {
+              "key": "status",
+              "label": "Status",
+              "type": "enum",
+              "options": ["-"],
               "default": 0
             }
           ],
           "knobs": [
             "preset",
-            "sample_path",
-            "alt_sample_path",
-            "length",
-            "phrase",
+            "A_sample_path",
+            "A_sample_length",
+            "B_sample_path",
+            "B_sample_length",
+            "B_chance",
             "complexity",
+            "phrase",
             "anchor",
             "roll",
             "fill",
             "retrigger",
             "retrigger_rate",
-            "swap_prob"
+            "save_preset",
+            "status"
           ]
         }
       }

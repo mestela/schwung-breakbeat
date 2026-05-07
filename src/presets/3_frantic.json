@@ -1,0 +1,15 @@
+{
+  "name": "Preset 4",
+  "A_sample_path": "/data/UserData/breakbeat-samples/Built-in/amen19.wav",
+  "A_sample_length": "4 bars",
+  "B_sample_path": "/data/UserData/breakbeat-samples/Built-in/riffin.wav",
+  "B_sample_length": "2 bars",
+  "B_chance": 92,
+  "complexity": 35,
+  "phrase": "2 bars",
+  "anchor": 16,
+  "roll": 0,
+  "fill": 0,
+  "retrigger": 25,
+  "retrigger_rate": "8x"
+}

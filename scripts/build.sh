@@ -55,6 +55,12 @@ for f in samples/*.wav; do
     cat "$f" > "$DIST_DIR/samples/$(basename "$f")"
 done
 
+# Bundle presets too
+mkdir -p "$DIST_DIR/presets"
+for f in src/presets/*.json; do
+    cat "$f" > "$DIST_DIR/presets/$(basename "$f")"
+done
+
 (cd dist && tar -czf "${MODULE_ID}-module.tar.gz" "${MODULE_ID}/")
 
 echo "Built: $TARBALL"

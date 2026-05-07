@@ -1,0 +1,15 @@
+{
+  "name": "Preset 1",
+  "A_sample_path": "/data/UserData/breakbeat-samples/Built-in/sesame.wav",
+  "A_sample_length": "1 bar",
+  "B_sample_path": "/data/UserData/breakbeat-samples/Built-in/groove.wav",
+  "B_sample_length": "2 bars",
+  "B_chance": 79,
+  "complexity": 3,
+  "phrase": "4 bars",
+  "anchor": 0,
+  "roll": 0,
+  "fill": 0,
+  "retrigger": 8,
+  "retrigger_rate": "2x"
+}

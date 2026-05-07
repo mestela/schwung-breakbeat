@@ -24,19 +24,29 @@ and **Phrase** add motion, fills, and multi-bar phrasing.
 
 | Setting | Values | What it does |
 |---|---|---|
-| **Loop** | 23 samples | Selects which WAV to slice. Includes amen01–20, apache, do, funkydrummer, groove, think, useme, and others. |
-| **Alt Loop** | 23 samples | Selects the loop used for phrase fills. |
-| **Length** | 0.25, 0.5, 1, 2, 4, 8 | Trigger interval in bars. At 0.25, you get 8 triggers per bar (16th-note resolution); at 1, you get 2 triggers per bar; at 8, one trigger per 8 bars. |
-| **Phrase** | Off, 2 bars, 4 bars, 8 bars, 16 bars | Multi-bar phrase length. At Off, every bar plays the same. When set, the *last* bar of each phrase becomes a fill bar (modulated by **Fill**). |
-| **Retrig Rate** | 2x, 3x, 4x, 8x, Rand | Sub-divisions per retrigger event. |
-| **Swap Prob** | 0–100 | Probability of swapping to Alt Loop on the last bar of a phrase. |
+| **A Sample** | filepath | Selects which WAV to slice. Opens file browser. |
+| **A Length** | enum | Trigger interval for A loop (1/4 bar to 8 bars). |
+| **B Sample** | filepath | Selects the loop used for phrase fills. |
+| **B Length** | enum | Trigger interval for B loop (1/4 bar to 8 bars). |
+| **B Chance** | 0–100 | Probability of swapping to B Loop on the last bar of a phrase. |
+| **Phrase** | enum | Multi-bar phrase length (Off, 2, 4, 8, 16 bars). |
+| **Retrig Rate** | enum | Sub-divisions per retrigger event (2x, 3x, 4x, 8x, Rand). |
 
 ### Meta
 
 | Knob | Values | What it does |
 |---|---|---|
-| **Preset** | Calm / Mid / Frantic | Curated combinations of the above. See preset table below. |
-| **Save Preset** | toggle | Logs current settings as a preset-data line for capture. |
+| **Preset** | enum | Selects a dynamic preset from `presets/` folder. |
+| **Save Preset** | toggle | Saves current settings as a new JSON file in `presets/`. |
+| **Status** | read-only | Displays current playing loop, slice, and retrig status (e.g., `A_3_1x`). |
+
+## Dynamic Presets & Custom Samples
+
+Presets are no longer hardcoded in C. They are stored as `.json` files in the `presets/` directory. The module scans this directory on startup and when saving a new preset.
+
+To add custom presets, place a JSON file in the `presets/` folder on the device and restart or save a preset to rescan.
+
+Custom samples can be loaded via the file browser for **A Sample** and **B Sample**. The browser opens in `/data/UserData/breakbeat-samples`, with symlinks to built-in samples and your User Library.
 
 ## How the algorithm picks slices
 
@@ -68,13 +78,12 @@ Reseed happens automatically on transport start, so each play produces a fresh s
 - **Anchor=80, Roll=70, Phrase=4, Fill=70** → bars 1–3 groove, bar 4 audibly opens up into a fill, bar 1 of the next phrase resets.
 - **Phrase=2, Fill=100** → every other bar feels wild.
 
-## Built-in presets
+## Built-in Presets
 
-| Preset | Loop | Length | Cplx | Anchor | Roll | Phrase | Fill | Retrig | Rate |
-|---|---|---|---|---|---|---|---|---|---|
-| Calm | amen01 | 0.5 | 18 | 80 | 70 | 4 | 50 | 16 | 2 |
-| Mid | amen09 | 0.5 | 56 | 60 | 50 | 4 | 60 | 8 | 4 |
-| Frantic | sesame | 0.25 | 80 | 30 | 20 | 2 | 80 | 11 | 4 |
+Loaded dynamically from `src/presets/`:
+- **1_calm**
+- **2_mid**
+- **3_frantic**
 
 ## UI Architecture
 

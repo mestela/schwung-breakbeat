@@ -1,0 +1,15 @@
+{
+  "name": "Preset 2",
+  "A_sample_path": "/data/UserData/breakbeat-samples/Built-in/amen01.wav",
+  "A_sample_length": "2 bars",
+  "B_sample_path": "/data/UserData/breakbeat-samples/Built-in/amen09.wav",
+  "B_sample_length": "2 bars",
+  "B_chance": 92,
+  "complexity": 25,
+  "phrase": "4 bars",
+  "anchor": 39,
+  "roll": 0,
+  "fill": 0,
+  "retrigger": 21,
+  "retrigger_rate": "4x"
+}
