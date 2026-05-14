@@ -11,6 +11,19 @@ MODULE_ID="breakbeat"
 DIST_DIR="dist/${MODULE_ID}"
 TARBALL="dist/${MODULE_ID}-module.tar.gz"
 
+# Verify module.json version matches the latest git tag so the tarball is
+# never shipped with a stale version string. Only checked on the host (not
+# inside Docker) since the container doesn't have access to git tags.
+if [ ! -f "/.dockerenv" ]; then
+    MODULE_VERSION=$(grep '"version"' src/module.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+    GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+    if [ -n "$GIT_TAG" ] && [ "$MODULE_VERSION" != "$GIT_TAG" ]; then
+        echo "ERROR: module.json version ($MODULE_VERSION) does not match latest git tag ($GIT_TAG)."
+        echo "       Bump the version in src/module.json and release.json before building a release."
+        exit 1
+    fi
+fi
+
 if [ -z "${CROSS_PREFIX:-}" ] && [ ! -f "/.dockerenv" ]; then
     echo "=== breakbeat build (via Docker) ==="
     if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
