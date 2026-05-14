@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync src/module.json version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Derive the version from the git tag and write it into
+          # src/module.json before the build. The tag is the single source
+          # of truth — no need to remember to bump module.json before tagging.
+          python3 - "$VERSION" <<'PYEOF'
+          import json, sys, pathlib
+          version = sys.argv[1]
+          path = pathlib.Path("src/module.json")
+          data = json.loads(path.read_text())
+          data["version"] = version
+          path.write_text(json.dumps(data, indent=2) + "\n")
+          print(f"  src/module.json: version -> {version}")
+          PYEOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build module
+        run: ./scripts/build.sh
+
+      - name: Verify tarball contents
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ls -lh dist/breakbeat-module.tar.gz
+          TARBALL_VERSION=$(tar -xzOf dist/breakbeat-module.tar.gz breakbeat/module.json | python3 -c "import json,sys; print(json.load(sys.stdin)['version'])")
+          if [ "$TARBALL_VERSION" != "$VERSION" ]; then
+            echo "ERROR: tarball module.json version ($TARBALL_VERSION) != tag version ($VERSION)"
+            exit 1
+          fi
+          echo "Tarball version matches tag: $VERSION"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/breakbeat-module.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit release.json + module.json sync
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
+          git fetch origin "$BRANCH"
+          git checkout -f "$BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Sync src/module.json on the default branch so the tree stays
+          # consistent with what was tagged.
+          python3 - "$VERSION" <<'PYEOF'
+          import json, sys, pathlib
+          version = sys.argv[1]
+          path = pathlib.Path("src/module.json")
+          data = json.loads(path.read_text())
+          data["version"] = version
+          path.write_text(json.dumps(data, indent=2) + "\n")
+          PYEOF
+          cat > release.json << EOF
+          {
+            "version": "${VERSION}",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/breakbeat-module.tar.gz"
+          }
+          EOF
+          git add release.json src/module.json
+          if git diff --cached --quiet; then
+            echo "No changes on $BRANCH"
+          else
+            git commit -m "ci: sync release.json + module.json for ${{ github.ref_name }}"
+            git push origin "$BRANCH"
+          fi
