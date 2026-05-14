@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include "plugin_api_v1.h"
@@ -102,7 +103,19 @@ static void scan_presets(const char *module_dir) {
         }
     }
     closedir(dir);
-    
+
+    /* Sort alphabetically so index 0 is always the lowest-numbered preset. */
+    for (int i = 0; i < g_total_presets - 1; i++) {
+        for (int j = i + 1; j < g_total_presets; j++) {
+            if (strcmp(g_preset_filenames[i], g_preset_filenames[j]) > 0) {
+                char tmp[64];
+                memcpy(tmp, g_preset_filenames[i], 64);
+                memcpy(g_preset_filenames[i], g_preset_filenames[j], 64);
+                memcpy(g_preset_filenames[j], tmp, 64);
+            }
+        }
+    }
+
     char dbg[64];
     snprintf(dbg, sizeof(dbg), "breakbeat: found %d presets", g_total_presets);
     wp_log(dbg);
@@ -276,6 +289,11 @@ static int open_wav(breakbeat_t *wp, const char *path, float expected_length) {
         close(fd);
         return -1;
     }
+    /* Pre-fault all pages now, while we're still in the MIDI callback (not
+     * the RT render thread). Without this, render_block would trigger OS page
+     * faults on first access, causing latency spikes that can trip Schwung's
+     * render watchdog and kill the module. */
+    madvise(map, map_size, MADV_WILLNEED);
 
     const uint8_t *raw = (const uint8_t *)map;
     if (memcmp(raw, "RIFF", 4) != 0 || memcmp(raw + 8, "WAVE", 4) != 0) {
@@ -399,6 +417,106 @@ static int apply_sample_path(breakbeat_t *bb, const char *path, float expected_l
 
 
 
+/* Parse a preset JSON blob and apply all fields to bb. Does not load audio. */
+static void apply_preset_json(breakbeat_t *bb, const char *json) {
+    char str_val[256];
+    float fval;
+    int ival;
+
+    if (json_get_string(json, "A_sample_path", str_val, sizeof(str_val)))
+        resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
+    else if (json_get_string(json, "sample_path", str_val, sizeof(str_val)))
+        resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
+
+    if (json_get_string(json, "B_sample_path", str_val, sizeof(str_val)))
+        resolve_sample_path(bb->module_dir, str_val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
+    else if (json_get_string(json, "alt_sample_path", str_val, sizeof(str_val)))
+        resolve_sample_path(bb->module_dir, str_val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
+
+    const char *length_names[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
+    float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+
+    if (json_get_string(json, "A_sample_length", str_val, sizeof(str_val))) {
+        for (int i = 0; i < 6; i++) {
+            if (strcmp(length_names[i], str_val) == 0) { bb->length = bb->main_length = length_vals[i]; break; }
+        }
+    } else if (json_get_string(json, "length", str_val, sizeof(str_val))) {
+        for (int i = 0; i < 6; i++) {
+            if (strcmp(length_names[i], str_val) == 0) { bb->length = bb->main_length = length_vals[i]; break; }
+        }
+    }
+
+    if (json_get_string(json, "B_sample_length", str_val, sizeof(str_val))) {
+        for (int i = 0; i < 6; i++) {
+            if (strcmp(length_names[i], str_val) == 0) { bb->alt_length = length_vals[i]; break; }
+        }
+    }
+
+    if (json_get_float(json, "complexity", &fval)) bb->complexity = fval / 100.0f;
+    if (json_get_float(json, "anchor",     &fval)) bb->anchor     = fval / 100.0f;
+    if (json_get_float(json, "roll",       &fval)) bb->roll       = fval / 100.0f;
+    if (json_get_float(json, "fill",       &fval)) bb->fill       = fval / 100.0f;
+    if (json_get_float(json, "retrigger",  &fval)) bb->retrigger_prob = fval / 100.0f;
+
+    if (json_get_string(json, "phrase", str_val, sizeof(str_val))) {
+        const char *phrases[] = {"Off", "2 bars", "4 bars", "8 bars", "16 bars"};
+        static const int phrase_values[] = {0, 2, 4, 8, 16};
+        for (int i = 0; i < 5; i++) {
+            if (strcmp(phrases[i], str_val) == 0) { bb->phrase_bars = phrase_values[i]; break; }
+        }
+    } else if (json_get_int(json, "phrase", &ival)) {
+        static const int phrase_values[] = {0, 2, 4, 8, 16};
+        if (ival >= 0 && ival < 5) bb->phrase_bars = phrase_values[ival];
+    }
+
+    if (json_get_string(json, "retrigger_rate", str_val, sizeof(str_val))) {
+        const char *rates[] = {"2x", "3x", "4x", "8x", "Rand"};
+        for (int i = 0; i < 5; i++) {
+            if (strcmp(rates[i], str_val) == 0) {
+                bb->retrigger_rate_idx = i;
+                if      (i == 0) bb->retrigger_divisions = 2;
+                else if (i == 1) bb->retrigger_divisions = 3;
+                else if (i == 2) bb->retrigger_divisions = 4;
+                else if (i == 3) bb->retrigger_divisions = 8;
+                break;
+            }
+        }
+    } else if (json_get_int(json, "retrigger_rate", &ival)) {
+        bb->retrigger_rate_idx = ival;
+        if      (ival == 0) bb->retrigger_divisions = 2;
+        else if (ival == 1) bb->retrigger_divisions = 3;
+        else if (ival == 2) bb->retrigger_divisions = 4;
+        else if (ival == 3) bb->retrigger_divisions = 8;
+    }
+
+    if (json_get_int(json, "B_chance", &ival))
+        bb->swap_prob = (float)ival / 100.0f;
+    else if (json_get_float(json, "swap_prob", &fval))
+        bb->swap_prob = fval / 100.0f;
+}
+
+/* Load preset idx, parse its JSON, and apply the sample immediately.
+ * Used at init time and can be called any time the transport is stopped. */
+static void load_preset_idx(breakbeat_t *bb, int idx) {
+    if (idx < 0) idx = 0;
+    if (idx >= g_total_presets) idx = g_total_presets - 1;
+    bb->preset_idx = idx;
+    if (g_total_presets == 0) return;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/presets/%s", bb->module_dir, g_preset_filenames[idx]);
+    char *json = read_file_to_string(path);
+    if (!json) {
+        wp_log("breakbeat: load_preset_idx: failed to read preset file");
+        return;
+    }
+    apply_preset_json(bb, json);
+    free(json);
+
+    apply_sample_path(bb, bb->main_sample_path, bb->main_length);
+    bb->pending_sample_path[0] = '\0';
+}
+
 static void* bb_create_instance(const char *module_dir, const char *json_defaults) {
     (void)json_defaults;
     breakbeat_t *bb = calloc(1, sizeof(breakbeat_t));
@@ -443,18 +561,19 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     
     scan_presets(bb->module_dir);
 
-    /* Defaults point at the install-time portal symlinks, so the filepath
-     * browser opens inside the Built-in samples folder on first use. */
+    /* Fallback paths — overwritten immediately by load_preset_idx below. */
     snprintf(bb->main_sample_path, sizeof(bb->main_sample_path),
-             "/data/UserData/breakbeat-samples/Built-in/amen.wav");
+             "/data/UserData/breakbeat-samples/Built-in/amen01.wav");
     snprintf(bb->alt_sample_path,  sizeof(bb->alt_sample_path),
              "/data/UserData/breakbeat-samples/Built-in/amen09.wav");
     bb->pending_sample_path[0] = '\0';
 
     if (g_host && g_host->log) g_host->log("breakbeat: instance created");
 
-    apply_sample_path(bb, bb->main_sample_path, bb->main_length);
-    bb->playing = 1; // Auto-play
+    /* Load the first preset (1_calm) immediately so the module is ready to
+     * make sound as soon as the transport starts, with no extra steps needed. */
+    load_preset_idx(bb, 0);
+    bb->playing = 1;
 
     return bb;
 }
@@ -623,99 +742,7 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         
         char *json = read_file_to_string(path);
         if (json) {
-            char str_val[256];
-            float fval;
-            int ival;
-            
-            if (json_get_string(json, "A_sample_path", str_val, sizeof(str_val))) {
-                resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
-            } else if (json_get_string(json, "sample_path", str_val, sizeof(str_val))) {
-                resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
-            }
-            
-            if (json_get_string(json, "B_sample_path", str_val, sizeof(str_val))) {
-                resolve_sample_path(bb->module_dir, str_val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
-            } else if (json_get_string(json, "alt_sample_path", str_val, sizeof(str_val))) {
-                resolve_sample_path(bb->module_dir, str_val, bb->alt_sample_path, sizeof(bb->alt_sample_path));
-            }
-            
-            if (json_get_string(json, "A_sample_length", str_val, sizeof(str_val))) {
-                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
-                float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
-                for (int i = 0; i < 6; i++) {
-                    if (strcmp(lengths[i], str_val) == 0) {
-                        bb->length = length_vals[i];
-                        bb->main_length = length_vals[i];
-                        break;
-                    }
-                }
-            } else if (json_get_string(json, "length", str_val, sizeof(str_val))) {
-                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
-                float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
-                for (int i = 0; i < 6; i++) {
-                    if (strcmp(lengths[i], str_val) == 0) {
-                        bb->length = length_vals[i];
-                        bb->main_length = length_vals[i];
-                        break;
-                    }
-                }
-            }
-            
-            if (json_get_string(json, "B_sample_length", str_val, sizeof(str_val))) {
-                const char *lengths[] = {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"};
-                float length_vals[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
-                for (int i = 0; i < 6; i++) {
-                    if (strcmp(lengths[i], str_val) == 0) {
-                        bb->alt_length = length_vals[i];
-                        break;
-                    }
-                }
-            }
-            if (json_get_float(json, "complexity", &fval)) bb->complexity = fval / 100.0f;
-            if (json_get_float(json, "anchor", &fval)) bb->anchor = fval / 100.0f;
-            if (json_get_float(json, "roll", &fval)) bb->roll = fval / 100.0f;
-            if (json_get_string(json, "phrase", str_val, sizeof(str_val))) {
-                const char *phrases[] = {"Off", "2 bars", "4 bars", "8 bars", "16 bars"};
-                static const int phrase_values[] = {0, 2, 4, 8, 16};
-                for (int i = 0; i < 5; i++) {
-                    if (strcmp(phrases[i], str_val) == 0) {
-                        bb->phrase_bars = phrase_values[i];
-                        break;
-                    }
-                }
-            } else if (json_get_int(json, "phrase", &ival)) {
-                static const int phrase_values[] = {0, 2, 4, 8, 16};
-                if (ival >= 0 && ival < 5) bb->phrase_bars = phrase_values[ival];
-            }
-            if (json_get_float(json, "fill", &fval)) bb->fill = fval / 100.0f;
-            if (json_get_float(json, "retrigger", &fval)) bb->retrigger_prob = fval / 100.0f;
-            if (json_get_int(json, "retrigger_rate", &ival)) {
-                bb->retrigger_rate_idx = ival;
-                if (ival == 0) bb->retrigger_divisions = 2;
-                else if (ival == 1) bb->retrigger_divisions = 3;
-                else if (ival == 2) bb->retrigger_divisions = 4;
-                else if (ival == 3) bb->retrigger_divisions = 8;
-            }
-            if (json_get_int(json, "B_chance", &ival)) {
-                bb->swap_prob = (float)ival / 100.0f;
-            } else if (json_get_float(json, "swap_prob", &fval)) {
-                bb->swap_prob = fval / 100.0f;
-            }
-            
-            if (json_get_string(json, "retrigger_rate", str_val, sizeof(str_val))) {
-                const char *rates[] = {"2x", "3x", "4x", "8x", "Rand"};
-                for (int i = 0; i < 5; i++) {
-                    if (strcmp(rates[i], str_val) == 0) {
-                        bb->retrigger_rate_idx = i;
-                        if (i == 0) bb->retrigger_divisions = 2;
-                        else if (i == 1) bb->retrigger_divisions = 3;
-                        else if (i == 2) bb->retrigger_divisions = 4;
-                        else if (i == 3) bb->retrigger_divisions = 8;
-                        break;
-                    }
-                }
-            }
-
+            apply_preset_json(bb, json);
             free(json);
         }
 
@@ -975,6 +1002,19 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             bb->swap_prob = (float)i / 100.0f;
             if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
             if (bb->swap_prob > 1.0f) bb->swap_prob = 1.0f;
+        }
+
+        /* Apply the sample immediately when the transport is not running.
+         * Deferring via pending_sample_path requires a MIDI clock bar boundary
+         * that may never arrive if the module is just loading. */
+        {
+            int is_running = 0;
+            if (g_host && g_host->get_clock_status)
+                is_running = (g_host->get_clock_status() == 2);
+            if (!is_running) {
+                apply_sample_path(bb, bb->main_sample_path, bb->main_length);
+                bb->pending_sample_path[0] = '\0';
+            }
         }
     }
 }

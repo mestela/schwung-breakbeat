@@ -116,3 +116,39 @@ Pure slice-selection logic is host-testable:
 ```bash
 ./tests/run_tests.sh  # compiles tests/test_slice_select.c and runs assertions
 ```
+
+## SSH setup (Mac → Move)
+
+The install script uses `scp`/`ssh` to push files to the device. If you get `Permission denied (publickey)`:
+
+```bash
+# Generate a key on your build machine
+ssh-keygen -t ed25519 -f ~/.ssh/move -N ""
+
+# Add it to the Move (run from a machine that already has access)
+echo "$(cat ~/.ssh/move.pub)" | ssh ableton@move.local \
+  "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+
+# Add a host entry so the key is picked up automatically
+cat >> ~/.ssh/config << 'EOF'
+Host move.local
+    User ableton
+    IdentityFile ~/.ssh/move
+    StrictHostKeyChecking no
+EOF
+```
+
+If the Move's host key has changed (after a firmware update or reset), clear the stale entry first:
+```bash
+ssh-keygen -R move.local
+```
+
+## Changelog
+
+### Startup fixes
+- **Module now loads the `1_calm` preset immediately on startup.** Previously the module tried to load a hardcoded `amen.wav` path that doesn't exist, leaving `bb->data = NULL` and producing silence until the user changed a preset or muted/unmuted the slot.
+- **Preset list is now sorted alphabetically** after scanning, so index 0 is always `1_calm` regardless of filesystem order.
+- **State restore now applies the sample immediately** when the transport is stopped, instead of deferring it to the next MIDI clock bar boundary (which might never arrive on a fresh load).
+
+### Sample-swap stability fix
+- **Added `madvise(MADV_WILLNEED)` after every `mmap` call in `open_wav`.** Without this, the kernel loads WAV pages lazily — the first time `render_block` touches a freshly-loaded sample it triggers OS page faults on the audio thread, causing latency spikes that trip Schwung's render watchdog and kill the module. This was most noticeable when the phrase engine swapped to the B sample mid-performance (e.g. ramping tempo through a phrase boundary). Pre-faulting happens in the MIDI callback, well before the audio thread needs the data.
