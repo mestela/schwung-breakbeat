@@ -1,8 +1,8 @@
 {
   "id": "breakbeat",
-  "name": "BB Gen",
+  "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",

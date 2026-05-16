@@ -72,6 +72,12 @@ typedef struct {
     char current_loop;
     char status_str[32];
 
+    /* Diagnostics — log key events once rather than every block. */
+    int dbg_first_render;     /* 1 until first render_block call is logged */
+    int dbg_silence_reason;   /* last silence reason code logged (0 = none yet) */
+    int dbg_last_clock_status;/* last value returned by get_clock_status */
+    uint64_t dbg_last_heartbeat; /* sample_counter at last periodic status log */
+
 } breakbeat_t;
 
 static const host_api_v1_t *g_host = NULL;
@@ -546,6 +552,10 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->bar_counter = 0;
     bb->reseed_pending = 0;
     bb->fd = -1;
+    bb->dbg_first_render = 1;
+    bb->dbg_silence_reason = 0;
+    bb->dbg_last_clock_status = -1;
+    bb->dbg_last_heartbeat = 0;
 
     /* Capture module_dir for relative-path resolution. */
     if (module_dir && module_dir[0]) {
@@ -1017,6 +1027,13 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             }
         }
     }
+    else {
+        /* Log any key the host sends that we don't handle — helps spot mute,
+         * bypass, or other host signals that might affect audio output. */
+        char buf[128];
+        snprintf(buf, sizeof(buf), "breakbeat: unhandled set_param key='%s' val='%.64s'", key, val);
+        wp_log(buf);
+    }
 }
 
 static int bb_get_param(void *instance, const char *key, char *buf, int buf_len) {
@@ -1166,14 +1183,46 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
 
 static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     breakbeat_t *bb = (breakbeat_t *)instance;
+
+    /* Log once on the very first render call so we can see the initial state
+     * in the log even when the user never hears audio. */
+    if (bb && bb->dbg_first_render) {
+        bb->dbg_first_render = 0;
+        char buf[BB_PATH_MAX + 96];
+        int clock_status = (g_host && g_host->get_clock_status) ? g_host->get_clock_status() : -1;
+        snprintf(buf, sizeof(buf),
+                 "breakbeat: first render — data=%s frames=%u playing=%d clock_status=%d sample=%s",
+                 bb->data ? "ok" : "NULL",
+                 bb->total_frames,
+                 bb->playing,
+                 clock_status,
+                 bb->main_sample_path);
+        wp_log(buf);
+    }
+
     if (!bb || !bb->data || bb->total_frames == 0) {
+        if (bb && bb->dbg_silence_reason != 1) {
+            bb->dbg_silence_reason = 1;
+            wp_log("breakbeat: silence — no sample loaded (data=NULL or total_frames=0)");
+        }
         memset(out_lr, 0, frames * 2 * sizeof(int16_t));
         return;
     }
-    
+
     // Auto-play on transport start, and STOP on stop!
     if (g_host && g_host->get_clock_status) {
-        int running = (g_host->get_clock_status() == 2);
+        int clock_status = g_host->get_clock_status();
+
+        /* Log clock status changes so we can spot unexpected host states. */
+        if (clock_status != bb->dbg_last_clock_status) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "breakbeat: clock_status changed %d -> %d",
+                     bb->dbg_last_clock_status, clock_status);
+            wp_log(buf);
+            bb->dbg_last_clock_status = clock_status;
+        }
+
+        int running = (clock_status == 2);
         if (running && !bb->playing) {
             srand((unsigned int)(time(NULL) ^ bb->sample_counter));
             bb->bar_counter = 0;
@@ -1188,10 +1237,31 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
             bb->bar_counter = 0;
         }
     }
-    
+
     if (!bb->playing) {
+        if (bb->dbg_silence_reason != 2) {
+            bb->dbg_silence_reason = 2;
+            int clock_status = (g_host && g_host->get_clock_status) ? g_host->get_clock_status() : -1;
+            char buf[96];
+            snprintf(buf, sizeof(buf), "breakbeat: silence — playing=0 clock_status=%d", clock_status);
+            wp_log(buf);
+        }
         memset(out_lr, 0, frames * 2 * sizeof(int16_t));
         return;
+    }
+
+    /* Clear silence reason so we re-log if silence returns later. */
+    bb->dbg_silence_reason = 0;
+
+    /* Periodic heartbeat every ~10 seconds so the log shows the module is alive. */
+    if (bb->sample_counter - bb->dbg_last_heartbeat >= 44100 * 10) {
+        bb->dbg_last_heartbeat = bb->sample_counter;
+        char buf[BB_PATH_MAX + 80];
+        snprintf(buf, sizeof(buf),
+                 "breakbeat: heartbeat — loop=%c slice=%d bpm=%.1f playing=%d sample=%s",
+                 bb->current_loop, bb->current_slice, bb->calculated_bpm,
+                 bb->playing, bb->main_sample_path);
+        wp_log(buf);
     }
     
     const int nch = bb->num_channels;
