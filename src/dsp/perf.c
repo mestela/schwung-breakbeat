@@ -1,0 +1,187 @@
+#include <stdio.h>
+#include "perf.h"
+
+void bb_perf_init(bb_perf_t *p) {
+    if (!p) return;
+    for (int i = 0; i < 8; i++) { p->slice_stack[i] = 0; p->slice_bank[i] = 0; }
+    p->slice_count    = 0;
+    p->reverse        = 0;
+    p->randomize      = 0;
+    p->freeze         = 0;
+    p->ab_swap        = 0;
+    p->half_held      = 0;
+    p->double_held    = 0;
+    p->rate_mult      = 1.0f;
+    p->stutter4       = 0;
+    p->stutter8       = 0;
+    p->stutter_div    = 0;
+    p->reseed_request = 0;
+}
+
+bb_pad_t bb_perf_decode(int note) {
+    bb_pad_t r = { BB_PAD_NONE, -1 };
+    /* Slices: notes 36-43 and 44-51 → A slice 0-7; 52-59 → B slice 0-7. */
+    if (note >= 36 && note <= 43) { r.kind = BB_PAD_A_SLICE; r.index = note - 36; return r; }
+    if (note >= 44 && note <= 51) { r.kind = BB_PAD_A_SLICE; r.index = note - 44; return r; }
+    if (note >= 52 && note <= 59) { r.kind = BB_PAD_B_SLICE; r.index = note - 52; return r; }
+    /* Macros: notes 60..(60+BB_MACRO_COUNT-1). */
+    if (note >= 60 && note < 60 + BB_MACRO_COUNT) {
+        r.kind = BB_PAD_MACRO; r.index = note - 60; return r;
+    }
+    return r;
+}
+
+void bb_perf_slice_push(bb_perf_t *p, int slice, int bank) {
+    if (!p || slice < 0 || slice > 7) return;
+    if (bank != 0 && bank != 1) bank = 0;
+    /* A (slice,bank) pair occupies at most one stack entry. If it's already
+     * held (e.g. a controller resent note-on without a note-off), remove the
+     * old entry and re-append so it becomes the top (preserves last-note
+     * priority) without leaving a duplicate that a single note-off couldn't
+     * clear — which would otherwise latch the slice as a stuck note. */
+    bb_perf_slice_release(p, slice, bank);
+    if (p->slice_count >= 8) return;   /* full; ignore */
+    p->slice_bank[p->slice_count] = bank;
+    p->slice_stack[p->slice_count] = slice;
+    p->slice_count++;
+}
+
+void bb_perf_slice_release(bb_perf_t *p, int slice, int bank) {
+    if (!p || p->slice_count <= 0) return;
+    if (bank != 0 && bank != 1) bank = 0;
+    /* Remove the most-recent entry matching (slice,bank), shifting rest down. */
+    int found = -1;
+    for (int i = p->slice_count - 1; i >= 0; i--) {
+        if (p->slice_stack[i] == slice && p->slice_bank[i] == bank) { found = i; break; }
+    }
+    if (found < 0) return;
+    for (int i = found; i < p->slice_count - 1; i++) {
+        p->slice_stack[i] = p->slice_stack[i + 1];
+        p->slice_bank[i]  = p->slice_bank[i + 1];
+    }
+    p->slice_count--;
+}
+
+int bb_perf_top_slice(const bb_perf_t *p) {
+    if (!p || p->slice_count <= 0) return -1;
+    return p->slice_stack[p->slice_count - 1];
+}
+
+int bb_perf_top_bank(const bb_perf_t *p) {
+    if (!p || p->slice_count <= 0) return -1;
+    return p->slice_bank[p->slice_count - 1];
+}
+
+void bb_perf_macro_on(bb_perf_t *p, int macro, int velocity) {
+    if (!p) return;
+    switch (macro) {
+        case BB_MACRO_AB_SWAP:   p->ab_swap   = 1; break;
+        case BB_MACRO_REVERSE:   p->reverse   = 1; break;
+        case BB_MACRO_RANDOMIZE: p->randomize = 1; break;
+        case BB_MACRO_FREEZE:    p->freeze    = 1; break;
+        case BB_MACRO_HALF:
+            if (!p->half_held) { p->half_held = 1; p->rate_mult *= 0.5f; }
+            break;
+        case BB_MACRO_DOUBLE:
+            if (!p->double_held) { p->double_held = 1; p->rate_mult *= 2.0f; }
+            break;
+        case BB_MACRO_STUTTER4:
+            p->stutter4 = 1;
+            p->stutter_div = p->stutter8 ? 8 : 4;
+            break;
+        case BB_MACRO_STUTTER8:
+            p->stutter8 = 1;
+            p->stutter_div = 8;   /* 8× wins when both held */
+            break;
+        case BB_MACRO_RESEED:
+            p->reseed_request = 1;
+            break;
+        default: break;
+    }
+    (void)velocity;
+}
+
+void bb_perf_macro_off(bb_perf_t *p, int macro) {
+    if (!p) return;
+    switch (macro) {
+        case BB_MACRO_AB_SWAP:   p->ab_swap   = 0; break;
+        case BB_MACRO_REVERSE:   p->reverse   = 0; break;
+        case BB_MACRO_RANDOMIZE: p->randomize = 0; break;
+        case BB_MACRO_FREEZE:    p->freeze    = 0; break;
+        case BB_MACRO_HALF:
+            if (p->half_held) { p->half_held = 0; p->rate_mult *= 2.0f; }
+            break;
+        case BB_MACRO_DOUBLE:
+            if (p->double_held) { p->double_held = 0; p->rate_mult *= 0.5f; }
+            break;
+        case BB_MACRO_STUTTER4:
+            p->stutter4 = 0;
+            p->stutter_div = p->stutter8 ? 8 : 0;
+            break;
+        case BB_MACRO_STUTTER8:
+            p->stutter8 = 0;
+            p->stutter_div = p->stutter4 ? 4 : 0;
+            break;
+        case BB_MACRO_RESEED:    /* one-shot; nothing to release */ break;
+        default: break;
+    }
+}
+
+bb_resolve_mode_t bb_perf_resolve(const bb_perf_t *p, int *out_slice) {
+    if (!p) return BB_RESOLVE_ENGINE;
+    if (p->slice_count > 0) {
+        if (out_slice) *out_slice = p->slice_stack[p->slice_count - 1];
+        return BB_RESOLVE_HELD;
+    }
+    if (p->freeze)    return BB_RESOLVE_FREEZE;
+    if (p->randomize) return BB_RESOLVE_RANDOM;
+    return BB_RESOLVE_ENGINE;
+}
+
+int bb_perf_active(const bb_perf_t *p) {
+    if (!p) return 0;
+    return (p->slice_count > 0)
+        || p->reverse || p->randomize || p->freeze || p->ab_swap
+        || p->half_held || p->double_held || (p->stutter_div > 0);
+}
+
+int bb_perf_trigger_fires(const bb_perf_t *p, float *acc) {
+    if (!acc) return 1;
+    float m = p ? p->rate_mult : 1.0f;
+    if (m <= 0.0f) m = 1.0f;
+    /* Only slow rates gate triggers; fast rates (2×) fire every clock and repeat
+     * the slice within the interval instead. Cap the cadence at 1.0/trigger. */
+    float cadence = (m < 1.0f) ? m : 1.0f;
+    *acc += cadence;
+    if (*acc >= 0.999f) {   /* 0.5+0.5 lands cleanly */
+        *acc -= 1.0f;
+        return 1;
+    }
+    return 0;
+}
+
+int bb_perf_status_str(const bb_perf_t *p, int engine_slice, char bank,
+                       char *out, int len) {
+    if (!out || len <= 0) return 0;
+    out[0] = '\0';
+    if (!bb_perf_active(p)) return 0;
+
+    int slice = (p->slice_count > 0) ? bb_perf_top_slice(p) : engine_slice;
+    if (slice < 0) slice = 0;
+
+    int n = snprintf(out, (size_t)len, "%c:%d", bank, slice + 1); /* 1-based */
+    if (n < 0) { out[0] = '\0'; return 0; }
+    if (n >= len) return len - 1;
+
+    /* Fixed token order so the readout is stable while pads are held. */
+    if (p->half_held)        n += snprintf(out + n, (size_t)(len - n), " .5x");
+    if (p->double_held)      n += snprintf(out + n, (size_t)(len - n), " 2x");
+    if (p->reverse)          n += snprintf(out + n, (size_t)(len - n), " REV");
+    if (p->freeze)           n += snprintf(out + n, (size_t)(len - n), " FRZ");
+    if (p->randomize)        n += snprintf(out + n, (size_t)(len - n), " RND");
+    if (p->stutter_div > 0)  n += snprintf(out + n, (size_t)(len - n), " ST%d", p->stutter_div);
+    if (p->ab_swap)          n += snprintf(out + n, (size_t)(len - n), " A/B");
+
+    if (n >= len) n = len - 1;
+    return n;
+}

@@ -54,6 +54,73 @@ All four retrigger knobs are independent — any combination can be active at on
 | **Save Preset** | toggle | Saves current settings as a new JSON file in `presets/`. |
 | **Status** | read-only | Displays current playing loop, slice, and retrig status (e.g., `A_3_1x`). |
 
+## Live Performance (MIDI pads)
+
+On top of the generative engine there's a **live performance layer**: momentary
+MIDI notes that override the engine while held. Send the module MIDI notes (from
+the Move pads, an external controller, or a sequencer) — note-on engages an
+effect, note-off releases it. Nothing latches: release everything and the
+generative engine seamlessly resumes on the next tick.
+
+> The DSP exposes the live state via the read-only `perf_status` param (e.g.
+> `A:3 .5x REV` while held, empty otherwise). An on-screen overlay that surfaces
+> this in the Signal Chain view is deferred — the chain/shadow UI is drawn by the
+> host, so it needs a host-side hook rather than the module's own `ui.js`.
+>
+> **Note range:** the map below is the module's *raw MIDI note* assignment (base
+> note 36, +8 per row). Note names use the convention where **C3 = 60** (middle C
+> = note 60). How the Move's physical pads map onto these notes is a host-side
+> concern still being finalised — for now drive it with raw notes from a
+> controller or sequencer.
+
+### MIDI map
+
+| Notes | Names | Row | Function |
+|---|---|---|---|
+| **36–43** | C1–G1 | 0 (base) | A-slice 0–7 — play a slice of sample A (momentary) |
+| **44–51** | G#1–D#2 | 1 | A-slice 0–7 — same as row 0 (kept for muscle memory) |
+| **52–59** | E2–B2 | 2 | B-slice 0–7 — play a slice of sample B |
+| **60–68** | C3–G#3 | 3+ | Macros (see below) |
+
+#### Slice pads
+
+| Note | Name | Slice |
+|---|---|---|
+| 36 / 44 | C1 / G#1 | A slice 1 |
+| 37 / 45 | C#1 / A1 | A slice 2 |
+| 38 / 46 | D1 / A#1 | A slice 3 |
+| 39 / 47 | D#1 / B1 | A slice 4 |
+| 40 / 48 | E1 / C2 | A slice 5 |
+| 41 / 49 | F1 / C#2 | A slice 6 |
+| 42 / 50 | F#1 / D2 | A slice 7 |
+| 43 / 51 | G1 / D#2 | A slice 8 |
+| 52–59 | E2–B2 | B slice 1–8 (from sample B) |
+
+Hold a slice pad to jump to and re-trigger that slice in time with the clock.
+**Last-note priority:** pressing a new slice pad overrides the current one;
+releasing it falls back to whatever slice is still held, then to the engine.
+Every press is momentary — a slice can only be held once, so a single note-off
+always fully releases it (no stuck notes).
+
+#### Macro pads
+
+| Note | Name | Macro | While held |
+|---|---|---|---|
+| **60** | C3 | A/B swap | Flips the engine to the other sample bank (A↔B) while held |
+| **61** | C#3 | Reverse | Slice plays backward, looping within its bounds |
+| **62** | D3 | Randomize | Every trigger picks a fresh random slice |
+| **63** | D#3 | Freeze | Latch the current slice and keep re-triggering it |
+| **64** | E3 | ½× (half speed) | Slice plays an octave down **and** half as fast (re-triggers every other beat) |
+| **65** | F3 | 2× (double speed) | Slice plays an octave up and twice as fast (re-triggers within the beat) |
+| **66** | F#3 | Stutter 4× | Forces a 4× sub-slice retrigger |
+| **67** | G3 | Stutter 8× | Forces an 8× sub-slice retrigger |
+| **68** | G#3 | Reseed | One-shot: re-rolls the RNG and forces an immediate new slice pick |
+
+All macros are momentary and stack. ½× and 2× held together cancel to 1×.
+Reverse combines with any speed. Stutter layers on top of everything; holding
+both Stutter pads gives 8× (the faster wins). A held slice pad always wins over
+Randomize and Freeze (explicit beats automatic).
+
 ## Dynamic Presets & Custom Samples
 
 Presets are no longer hardcoded in C. They are stored as `.json` files in the `presets/` directory. The module scans this directory on startup and when saving a new preset.
@@ -117,10 +184,10 @@ After install, restart Schwung on the device to load the module.
 
 ## Testing
 
-Pure slice-selection logic is host-testable:
+Pure slice-selection and performance-layer logic are host-testable:
 
 ```bash
-./tests/run_tests.sh  # compiles tests/test_slice_select.c and runs assertions
+./tests/run_tests.sh  # compiles + runs test_slice_select.c and test_perf.c
 ```
 
 ## SSH setup (Mac → Move)
@@ -150,6 +217,20 @@ ssh-keygen -R move.local
 ```
 
 ## Changelog
+
+### v0.4.x — Live performance layer
+- **Dual A/B buffers (Phase 2).** A and B samples are now both resident, so the A/B-swap macro (note 60) flips the engine between banks while held, and the B-slice row (notes 52–59) plays real slices of sample B. Each bank keeps its own length. (Held B slices retrigger at the engine's current cadence; per-bank cadence is a later refinement.)
+- **Stutter split into two pads.** Stutter is now two separate momentary notes — 4× (note 66) and 8× (note 67) — instead of one velocity-sensitive pad. Holding both gives 8×. Reseed moves to note 68.
+- **Momentary MIDI-pad performance system.** Slice pads (notes 36–59) and macro
+  pads (60–67) override the generative engine while held; release to resume. See
+  the [MIDI map](#midi-map) above.
+- **Live state readout.** The `perf_status` param reports the held slice and
+  active macros (e.g. `A:3 .5x REV`). A Signal-Chain on-screen overlay for this
+  is deferred (needs a host-side hook).
+- **½×/2× are true half/double speed**, not just pitch: ½× re-triggers the slice
+  every other beat (plays twice as long), 2× re-triggers within the beat.
+- **No stuck notes.** Repeated note-ons for the same slice dedupe to one held
+  entry, so a single note-off always releases it.
 
 ### v0.4.0
 - **Multi-rate retrigger.** Replaced the single Retrigger + Retrig Rate pair with four independent per-bar probability knobs (Retrig 2x / 3x / 4x / 8x). Any combination can be active simultaneously; if multiple rates fire on the same beat one is chosen at random. Probabilities are normalised correctly using the inverse binomial formula so 100% guarantees the rate fires on every beat and 5% means roughly 5% of bars. Old presets migrate automatically.
