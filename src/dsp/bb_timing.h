@@ -13,6 +13,7 @@ typedef struct {
     int tick_in_bar;
     int tick_in_cycle;
     int trigger_count;
+    int awaiting_first_tick;
 } bb_timing_t;
 
 void bb_timing_init(bb_timing_t *timing);

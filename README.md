@@ -151,6 +151,12 @@ ssh-keygen -R move.local
 
 ## Changelog
 
+### v0.4.14
+- **Native Move tempo.** Breakbeat reads the live Set BPM published by Schwung 1.6 instead of relying on the legacy inferred project-tempo callback.
+- **Correct first downbeat.** MIDI Start now arms playback; slice zero begins on the first clock pulse, which is Move's actual downbeat.
+- **Tempo changes while stopped.** The current Move tempo is refreshed directly on Start, preventing the previous BPM from swallowing the opening slice after a stopped tempo edit.
+- **Live tempo changes.** Changes made during playback remain sample-accurate to Move's clock while the sample rate follows the newly reported BPM.
+
 ### v0.4.11
 - **Deterministic transport and phrasing.** MIDI clock owns bar boundaries directly: A plays the non-fill bars and B is selected only on the final phrase bar, with no deferred one-bar-ahead switch state.
 - **Stable live editing.** A/B sample choices load on a low-priority worker without blocking Move's shared audio callback. Replacing a sample preserves the current slice instead of shifting the sequence.

@@ -36,6 +36,7 @@
 #define MOVE_PLUGIN_API_V1_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define MOVE_PLUGIN_API_VERSION 1
 
@@ -51,6 +52,7 @@
 #define MOVE_MIDI_SOURCE_EXTERNAL 2
 #define MOVE_MIDI_SOURCE_HOST 3  /* Host-generated (clock, etc) */
 #define MOVE_MIDI_SOURCE_FX_BROADCAST 4  /* Broadcast to audio FX only (skip synth) */
+#define MOVE_MIDI_SOURCE_TOUCH 5
 
 /* Clock status identifiers for host_api_v1.get_clock_status() */
 #define MOVE_CLOCK_STATUS_UNAVAILABLE 0  /* Clock output not available/configured */
@@ -118,9 +120,12 @@ typedef struct host_api_v1 {
     int (*midi_inject_to_move)(const uint8_t *msg, int len);
     int (*slot_recv_channel)(void *instance);
     double (*get_beat_position)(void);
-    float (*get_project_bpm)(void);
+    void *reserved[8];
 
 } host_api_v1_t;
+
+_Static_assert(offsetof(host_api_v1_t, reserved) == 120,
+               "host_api_v1_t::reserved must start at +120");
 
 /*
  * Plugin API - implemented by plugin, returned to host

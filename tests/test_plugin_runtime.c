@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../src/dsp/plugin_api_v1.h"
+#define MOVE_INFO_NO_READER
+#include "../src/dsp/move_info.h"
 
 static int pass_count;
 static int fail_count;
@@ -18,10 +20,20 @@ static int fail_count;
 
 static void quiet_log(const char *msg) { (void)msg; }
 static int stopped_status(void) { return MOVE_CLOCK_STATUS_STOPPED; }
-static float g_host_bpm = 137.0f;
+static float g_host_bpm = 99.0f;
 static float test_bpm(void) { return g_host_bpm; }
-static float g_project_bpm = 137.0f;
-static float test_project_bpm(void) { return g_project_bpm; }
+static float g_move_bpm = 137.0f;
+__attribute__((visibility("default")))
+int schwung_move_info(move_info_t *out, size_t cap)
+{
+    if (!out || cap < sizeof(*out)) return 0;
+    memset(out, 0, sizeof(*out));
+    out->size = sizeof(*out);
+    out->version = MOVE_INFO_VERSION;
+    out->valid = 1;
+    out->tempo = g_move_bpm;
+    return 1;
+}
 static double g_beat_position = -1.0;
 static double test_beat_position(void) { return g_beat_position; }
 
@@ -88,7 +100,6 @@ int main(int argc, char **argv) {
     host.get_clock_status = stopped_status;
     host.get_bpm = test_bpm;
     host.get_beat_position = test_beat_position;
-    host.get_project_bpm = test_project_bpm;
 
     plugin_api_v2_t *api = init(&host);
     CHECK(api && api->create_instance && api->render_block,
@@ -138,11 +149,17 @@ int main(int argc, char **argv) {
     api->set_param(instance, "state", state);
 
     const uint8_t start = 0xFA;
+    const uint8_t stop = 0xFC;
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
     memset(audio, 0, sizeof(audio));
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
+    CHECK(buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
+          "Start pre-roll stays silent before the real downbeat");
+    const uint8_t first_clock = 0xF8;
+    api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     CHECK(!buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
-          "Start produces audio immediately");
+          "first clock releases slice zero on the downbeat");
 
     char status[32];
     api->get_param(instance, "status", status, sizeof(status));
@@ -156,10 +173,10 @@ int main(int argc, char **argv) {
           "live A length change takes effect at the next new trigger interval");
     api->set_param(instance, "A_sample_length", "2"); /* restore 1 bar */
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
 
-    g_project_bpm = 142.0f;
-    g_host_bpm = 142.0f;
+    g_move_bpm = 142.0f;
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "tempo_bpm", tempo, sizeof(tempo));
     CHECK(strncmp(tempo, "142.000", 7) == 0,
@@ -167,12 +184,22 @@ int main(int argc, char **argv) {
 
     /* Move can defer persisting Song.abl while transport is running. Its MIDI
      * clock changes immediately, so live BPM must win for playback rate. */
-    g_host_bpm = 74.0f;
+    g_move_bpm = 74.0f;
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "tempo_bpm", tempo, sizeof(tempo));
     CHECK(strncmp(tempo, "74.000", 6) == 0,
           "running playback rate follows a live tempo change without restart");
-    g_host_bpm = 142.0f;
+    g_move_bpm = 142.0f;
+
+    api->on_midi(instance, &stop, 1, MOVE_MIDI_SOURCE_HOST);
+    g_move_bpm = 96.0f;
+    api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->get_param(instance, "tempo_bpm", tempo, sizeof(tempo));
+    CHECK(strncmp(tempo, "96.000", 6) == 0,
+          "transport Start refreshes a tempo changed while stopped");
+    api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
+    g_move_bpm = 142.0f;
 
     int16_t previous_audio[MOVE_FRAMES_PER_BLOCK * 2];
     memcpy(previous_audio, audio, sizeof(audio));
@@ -225,7 +252,6 @@ int main(int argc, char **argv) {
     api->get_param(instance, "status", status, sizeof(status));
     CHECK(status[0] == 'B', "second phrase reaches its one-bar B fill");
 
-    const uint8_t stop = 0xFC;
     api->on_midi(instance, &stop, 1, MOVE_MIDI_SOURCE_HOST);
     memset(audio, 1, sizeof(audio));
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
@@ -233,6 +259,7 @@ int main(int argc, char **argv) {
           "Stop silences the next block");
 
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
     CHECK(strncmp(status, "A_0_", 4) == 0,
@@ -255,6 +282,7 @@ int main(int argc, char **argv) {
     usleep(250000);
     api->on_midi(instance, &stop, 1, MOVE_MIDI_SOURCE_HOST);
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     int16_t switched_audio[MOVE_FRAMES_PER_BLOCK * 2];
     api->render_block(instance, switched_audio, MOVE_FRAMES_PER_BLOCK);
 
@@ -271,6 +299,7 @@ int main(int argc, char **argv) {
     CHECK(reference != NULL, "create alternate-sample reference instance");
     int16_t expected_audio[MOVE_FRAMES_PER_BLOCK * 2];
     api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     CHECK(buffers_equal(switched_audio, expected_audio,
                         MOVE_FRAMES_PER_BLOCK * 2),

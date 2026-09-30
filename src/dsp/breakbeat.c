@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include "plugin_api_v1.h"
+#include "move_info.h"
 #include "slice_select.h"
 #include "bb_timing.h"
 #include <time.h>
@@ -173,6 +174,16 @@ typedef struct {
 } breakbeat_t;
 
 static const host_api_v1_t *g_host = NULL;
+
+static float bb_current_move_bpm(void)
+{
+    move_info_t info;
+    if (move_info_read(&info) && info.valid &&
+        info.tempo >= 20.0f && info.tempo <= 400.0f)
+        return info.tempo;
+    return 0.0f;
+}
+
 static char g_preset_filenames[32][64];
 static int g_total_presets = 0;
 
@@ -1015,13 +1026,9 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->dbg_last_heartbeat = 0;
     bb->rng_state = (uint32_t)time(NULL) ^ (uint32_t)(uintptr_t)bb;
 
-    /* Seed the stored tempo from the Set itself, never from a live clock
-     * estimate. The render path keeps this value current if the user changes
-     * the Move tempo after the module has been instantiated. */
-    if (g_host && g_host->get_project_bpm) {
-        float bpm = g_host->get_project_bpm();
-        if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
-    }
+    /* Resolve the Schwung 1.6 Move-info reader outside the audio path and seed
+     * playback from Move's actual live tempo. */
+    bb->stable_bpm = bb_current_move_bpm();
     if (bb->stable_bpm < 20.0f && g_host && g_host->get_bpm) {
         float bpm = g_host->get_bpm();
         if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
@@ -1090,6 +1097,13 @@ static void bb_start_preview(breakbeat_t *bb) {
 }
 
 static void bb_reset_transport(breakbeat_t *bb) {
+    move_info_t info;
+    /* Refresh at the Start/Continue event itself. When Move is stopped it can
+     * leave the audio renderer idle, so a tempo edit may otherwise retain the
+     * previous BPM until after the first downbeat. */
+    if (move_info_read(&info) && info.valid &&
+        info.tempo >= 20.0f && info.tempo <= 400.0f)
+        bb->stable_bpm = info.tempo;
     /* Every new song run starts with A, even if Stop arrived during the B
      * fill. Both samples are resident, so this metadata swap is RT-safe. */
     if (bb->current_loop != 'A' && bb->standby_loop == 'A') {
@@ -1679,37 +1693,27 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     if (running && !bb->was_running) bb_reset_transport(bb);
     if (!running) bb->was_running = 0;
 
-    /* The stored Set tempo gives an immediate rate before the live clock has
-     * completed its first clean measurement window. While running, prefer the
-     * host's measured clock BPM so tempo-knob changes alter sample rate without
-     * requiring Stop/Start (Move may defer writing Song.abl until Stop). */
-    if (g_host && g_host->get_project_bpm) {
-        float bpm = g_host->get_project_bpm();
-        if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
-        else if (bb->stable_bpm < 20.0f && g_host->get_bpm) {
-            /* A newly loaded Set may briefly have no published snapshot. Use
-             * the host's best tempo once, then retain the last valid value. */
+    /* Schwung 1.6 publishes Move's own tempo at most every 20 ms. Keep the
+     * last valid value across the brief invalid window during a Set load. */
+    {
+        float bpm = bb_current_move_bpm();
+        if (bpm >= 20.0f && bpm <= 400.0f)
+            bb->stable_bpm = bpm;
+        else if (bb->stable_bpm < 20.0f && g_host && g_host->get_bpm) {
             bpm = g_host->get_bpm();
-            if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
+            if (bpm >= 20.0f && bpm <= 400.0f)
+                bb->stable_bpm = bpm;
         }
-    } else if (g_host && g_host->get_bpm &&
-               (!running || bb->stable_bpm < 20.0f)) {
-        /* Compatibility only for older Schwung versions: never follow their
-         * live clock estimator continuously while audio is running. */
-        float bpm = g_host->get_bpm();
-        if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
-    }
-    if (running && g_host && g_host->get_bpm) {
-        /* Once MIDI clock is measured, get_bpm() returns that live value. Until
-         * then Schwung returns the stored Set BPM, so this is safe from the
-         * old first-bar low/zero estimate. */
-        float bpm = g_host->get_bpm();
-        if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
     }
     if (bb->stable_bpm < 20.0f || bb->stable_bpm > 400.0f)
         bb->stable_bpm = 120.0f;
 
     int previewing = (bb->preview_frames > 0);
+    if (running && bb->timing.awaiting_first_tick) {
+        atomic_fetch_sub_explicit(&bb->sample_readers, 1, memory_order_release);
+        memset(out_lr, 0, frames * 2 * sizeof(int16_t));
+        return;
+    }
     if (!running && !previewing) {
         atomic_fetch_sub_explicit(&bb->sample_readers, 1, memory_order_release);
         memset(out_lr, 0, frames * 2 * sizeof(int16_t));

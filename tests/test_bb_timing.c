@@ -26,6 +26,12 @@ int main(void) {
     CHECK(bb_timing_on_realtime(&t, 0xFA, 12, &beat) == BB_TIMING_START,
           "Start enters running state");
     CHECK(t.running == 1 && beat == 0, "Start resets to slice zero");
+    CHECK(t.awaiting_first_tick == 1, "Start arms the real downbeat");
+
+    CHECK(bb_timing_on_realtime(&t, 0xF8, 12, &beat) == 0,
+          "first clock is the downbeat, not the next slice");
+    CHECK(t.awaiting_first_tick == 0 && beat == 0,
+          "first clock releases slice zero");
 
     for (int i = 0; i < 11; i++)
         CHECK(bb_timing_on_realtime(&t, 0xF8, 12, &beat) == 0,

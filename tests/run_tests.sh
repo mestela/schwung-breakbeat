@@ -27,7 +27,7 @@ cc -Wall -Wextra -O0 -g -std=c11 -shared -fPIC \
     -lm -pthread \
     -o build/tests/dsp.so
 
-cc -Wall -Wextra -O0 -g -std=c11 \
+cc -Wall -Wextra -O0 -g -std=c11 -rdynamic \
     -Isrc/dsp \
     tests/test_plugin_runtime.c \
     -pthread \
