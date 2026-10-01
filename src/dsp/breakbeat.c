@@ -1239,14 +1239,14 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
                 bb->preview_frames = (int)ceilf(bb_timing_samples_per_trigger(
                     bb->stable_bpm, length, MOVE_SAMPLE_RATE));
             } else {
-                /* Notes a little after a boundary belong to that slice.
-                 * Earlier notes wait for the next boundary; this gives a
-                 * live pad a full slice before automation takes over. */
-                int grace = bb->ticks_per_trigger / 4;
-                if (grace < 1) grace = 1;
-                if (grace > 3) grace = 3;
-                if (!bb->timing.awaiting_first_tick &&
-                    bb->timing.tick_in_cycle <= grace) {
+                /* A note can claim this boundary only before its audio block
+                 * renders. Once the block has rendered, even a slightly late
+                 * note waits for the next boundary rather than sounding off-grid. */
+                int boundary_unrendered = !bb->timing.awaiting_first_tick &&
+                    (bb->pending_trigger || bb->pending_manual_slice >= 0 ||
+                     bb->pending_bar ||
+                     (bb->just_reset && bb->timing.tick_in_cycle == 0));
+                if (boundary_unrendered) {
                     bb->pending_manual_slice = choice;
                     bb->queued_slice = -1;
                     bb->pending_trigger = 0;

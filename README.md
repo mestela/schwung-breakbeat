@@ -58,8 +58,8 @@ All four retrigger knobs are independent — any combination can be active at on
 
 In drum-pad layout, pads 1–8 (notes 36–43) select A slices 0–7, and pads
 9–16 (notes 44–51) select B slices 0–7. A pad press auditions one slice while
-Play is stopped. With Play running, an early note waits for the next slice boundary.
-A note arriving just after a boundary plays immediately. The selected slice
+Play is stopped. With Play running, a note waits for the next slice boundary
+unless that boundary has not rendered yet. The selected slice
 then has its turn, and the following boundary returns to the automatic pattern.
 Each pad slice plays at its own loop's A or B length, even when the automatic
 pattern uses the other loop's grid. Notes recorded on later steps can each
@@ -161,6 +161,9 @@ ssh-keygen -R move.local
 ```
 
 ## Changelog
+
+### Unreleased
+- **Tighter live-pad timing.** A pad note received after a slice has started sounding waits for the next clocked slice boundary.
 
 ### v0.4.20
 - **Two banks of playable slices.** Pads 1–8 play A and pads 9–16 play B, including audition while stopped and notes programmed in a clip.
