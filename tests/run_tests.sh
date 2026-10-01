@@ -21,9 +21,17 @@ cc -Wall -Wextra -O0 -g -std=c99 \
 ./tests/test_bb_timing
 
 mkdir -p build/tests
+cc -Wall -Wextra -O0 -g -std=c99 \
+    -Isrc/dsp \
+    tests/test_grain_stretch.c src/dsp/grain_stretch.c \
+    -o build/tests/test_grain_stretch
+
+./build/tests/test_grain_stretch
+
+mkdir -p build/tests
 cc -Wall -Wextra -O0 -g -std=c11 -shared -fPIC \
     -Isrc/dsp \
-    src/dsp/breakbeat.c src/dsp/slice_select.c src/dsp/bb_timing.c \
+    src/dsp/breakbeat.c src/dsp/slice_select.c src/dsp/bb_timing.c src/dsp/grain_stretch.c \
     -lm -pthread \
     -o build/tests/dsp.so
 

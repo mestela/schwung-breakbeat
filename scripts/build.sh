@@ -91,6 +91,7 @@ echo "Compiling DSP..."
     src/dsp/breakbeat.c \
     src/dsp/slice_select.c \
     src/dsp/bb_timing.c \
+    src/dsp/grain_stretch.c \
     -o build/dsp.so \
     -lm -pthread
 

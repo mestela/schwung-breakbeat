@@ -13,6 +13,7 @@
 #include "move_info.h"
 #include "slice_select.h"
 #include "bb_timing.h"
+#include "grain_stretch.h"
 #include <time.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -80,6 +81,10 @@ typedef struct {
     int pending_manual_slice; /* note selected at the current slice clock */
     int manual_slice_active;  /* use the played loop's own length until handback */
     int suppress_next_preset_preview; /* first host preset assignment is restore */
+    int pitch_lock;           /* preserve source pitch as tempo changes */
+    int grain_fx;             /* 0..100, probability of repeated grain pairs */
+    int grain_cycle_ms;       /* source grain duration */
+    bb_grain_t grain;
 
     uint64_t sample_counter;
 
@@ -402,7 +407,7 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "{\"modes\":null,\"levels\":{\"root\":{"
         "\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\","
         "\"knobs\":[\"preset\",\"A_sample_path\",\"A_sample_length\",\"B_sample_path\",\"B_sample_length\","
-        "\"B_chance\",\"complexity\",\"phrase\",\"anchor\",\"roll\",\"fill\","
+        "\"B_chance\",\"pitch_lock\",\"grain_fx\",\"grain_cycle_ms\",\"complexity\",\"phrase\",\"anchor\",\"roll\",\"fill\","
         "\"retrig_2x\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\",\"save_preset\",\"status\"],"
         "\"params\":["
         "{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
@@ -411,6 +416,9 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "{\"key\":\"B_sample_path\",\"label\":\"B Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
         "{\"key\":\"B_sample_length\",\"label\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
         "{\"key\":\"B_chance\",\"label\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"pitch_lock\",\"label\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
+        "{\"key\":\"grain_fx\",\"label\":\"Grain FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120},"
         "{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
         "{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
         "{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
@@ -438,6 +446,9 @@ static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
         "{\"key\":\"B_sample_path\",\"name\":\"B Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
         "{\"key\":\"B_sample_length\",\"name\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
         "{\"key\":\"B_chance\",\"name\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"pitch_lock\",\"name\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
+        "{\"key\":\"grain_fx\",\"name\":\"Grain FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"grain_cycle_ms\",\"name\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120},"
         "{\"key\":\"complexity\",\"name\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
         "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
         "{\"key\":\"anchor\",\"name\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
@@ -672,6 +683,7 @@ static void install_loaded_sample(breakbeat_t *bb, char loop,
          * sound under the playhead, not restart the sequencer at slice zero. */
         bb->current_slice &= 7;
         bb->play_pos = (float)bb->slice_starts[bb->current_slice];
+        bb_grain_reset(&bb->grain);
         if (!bb->timing.running) bb_start_preview(bb);
         loaded->fd = -1;
         loaded->map = NULL;
@@ -860,6 +872,7 @@ static int activate_standby_sample(breakbeat_t *bb) {
     bb->ticks_per_trigger = (int)(12.0f * bb->active_length + 0.5f);
     if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
     bb->play_pos = (float)bb->slice_starts[0];
+    bb_grain_reset(&bb->grain);
     return 0;
 }
 
@@ -916,6 +929,21 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
     char str_val[256];
     float fval;
     int ival;
+
+    bb->pitch_lock = 0;
+    bb->grain_fx = 0;
+    bb->grain_cycle_ms = 40;
+    if (json_get_int(json, "pitch_lock", &ival)) bb->pitch_lock = (ival != 0);
+    if (json_get_int(json, "grain_fx", &ival)) {
+        if (ival < 0) ival = 0;
+        if (ival > 100) ival = 100;
+        bb->grain_fx = ival;
+    }
+    if (json_get_int(json, "grain_cycle_ms", &ival)) {
+        if (ival < 10) ival = 10;
+        if (ival > 120) ival = 120;
+        bb->grain_cycle_ms = ival;
+    }
 
     if (json_get_string(json, "A_sample_path", str_val, sizeof(str_val)))
         resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
@@ -1065,6 +1093,10 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->roll = 0.0f;
     bb->phrase_bars = 0;
     bb->fill = 0.0f;
+    bb->pitch_lock = 0;
+    bb->grain_fx = 0;
+    bb->grain_cycle_ms = 40;
+    bb_grain_reset(&bb->grain);
     bb->bar_counter = 0;
     bb->reseed_pending = 0;
     bb->fd = -1;
@@ -1139,6 +1171,7 @@ static void bb_start_preview(breakbeat_t *bb) {
     float spb = ((float)MOVE_SAMPLE_RATE * 60.0f / bpm) * 4.0f;
     bb->preview_frames      = (int)(spb * bb->active_length);
     bb->play_pos            = (float)bb->slice_starts[0];
+    bb_grain_reset(&bb->grain);
     bb->current_slice       = 0;
     bb->trigger_phase       = 0.0f;
     bb->bar_phase           = 0.0f;
@@ -1159,6 +1192,7 @@ static void bb_reset_transport(breakbeat_t *bb) {
     bb->trigger_count     = 0;
     bb->bar_counter       = 0;
     bb->current_slice     = 0;
+    bb_grain_reset(&bb->grain);
     bb->sub_slice_active  = 0;
     bb->sub_slice_counter = 0;
     bb->just_reset        = 1;
@@ -1348,6 +1382,22 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->complexity < 0.0f) bb->complexity = 0.0f;
         if (bb->complexity > 1.0f) bb->complexity = 1.0f;
     }
+    else if (strcmp(key, "pitch_lock") == 0) {
+        bb->pitch_lock = atoi(val) != 0;
+        bb_grain_reset(&bb->grain);
+    }
+    else if (strcmp(key, "grain_fx") == 0) {
+        bb->grain_fx = atoi(val);
+        if (bb->grain_fx < 0) bb->grain_fx = 0;
+        if (bb->grain_fx > 100) bb->grain_fx = 100;
+        bb_grain_reset(&bb->grain);
+    }
+    else if (strcmp(key, "grain_cycle_ms") == 0) {
+        bb->grain_cycle_ms = atoi(val);
+        if (bb->grain_cycle_ms < 10) bb->grain_cycle_ms = 10;
+        if (bb->grain_cycle_ms > 120) bb->grain_cycle_ms = 120;
+        bb_grain_reset(&bb->grain);
+    }
     else if (strcmp(key, "anchor") == 0) {
         bb->anchor = atof(val) / 100.0f;
         if (bb->anchor < 0.0f) bb->anchor = 0.0f;
@@ -1453,6 +1503,9 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
                 fprintf(f, "  \"B_sample_path\": \"%s\",\n", bb->alt_sample_path);
                 fprintf(f, "  \"B_sample_length\": \"%s\",\n", lengths[alt_len_idx]);
                 fprintf(f, "  \"B_chance\": %d,\n", (int)(bb->swap_prob * 100.0f));
+                fprintf(f, "  \"pitch_lock\": %d,\n", bb->pitch_lock);
+                fprintf(f, "  \"grain_fx\": %d,\n", bb->grain_fx);
+                fprintf(f, "  \"grain_cycle_ms\": %d,\n", bb->grain_cycle_ms);
                 fprintf(f, "  \"complexity\": %d,\n", (int)(bb->complexity * 100.0f));
                 fprintf(f, "  \"phrase\": \"%s\",\n", phrases[phrase_idx]);
                 fprintf(f, "  \"anchor\": %d,\n", (int)(bb->anchor * 100.0f));
@@ -1516,6 +1569,17 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             bb->complexity = (float)i / 100.0f;
             if (bb->complexity < 0.0f) bb->complexity = 0.0f;
             if (bb->complexity > 1.0f) bb->complexity = 1.0f;
+        }
+        if (json_get_int(val, "pitch_lock", &i)) bb->pitch_lock = (i != 0);
+        if (json_get_int(val, "grain_fx", &i)) {
+            if (i < 0) i = 0;
+            if (i > 100) i = 100;
+            bb->grain_fx = i;
+        }
+        if (json_get_int(val, "grain_cycle_ms", &i)) {
+            if (i < 10) i = 10;
+            if (i > 120) i = 120;
+            bb->grain_cycle_ms = i;
         }
         if (json_get_int(val, "anchor", &i)) {
             bb->anchor = (float)i / 100.0f;
@@ -1639,6 +1703,15 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "complexity") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->complexity * 100.0f));
     }
+    else if (strcmp(key, "pitch_lock") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->pitch_lock);
+    }
+    else if (strcmp(key, "grain_fx") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->grain_fx);
+    }
+    else if (strcmp(key, "grain_cycle_ms") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->grain_cycle_ms);
+    }
     else if (strcmp(key, "anchor") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->anchor * 100.0f));
     }
@@ -1703,7 +1776,8 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len,
             "{\"preset_index\":%d,\"sample_path\":\"%s\",\"alt_sample_path\":\"%s\","
             "\"length\":%d,\"alt_length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,"
-            "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"swap_prob\":%d}",
+            "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"swap_prob\":%d,"
+            "\"pitch_lock\":%d,\"grain_fx\":%d,\"grain_cycle_ms\":%d}",
             bb->preset_idx,
             bb->main_sample_path, bb->alt_sample_path,
             len_idx, alt_len_idx,
@@ -1711,7 +1785,8 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             (int)(bb->roll * 100.0f), phrase_idx, (int)(bb->fill * 100.0f),
             (int)(bb->retrig_p[0] * 100.0f), (int)(bb->retrig_p[1] * 100.0f),
             (int)(bb->retrig_p[2] * 100.0f), (int)(bb->retrig_p[3] * 100.0f),
-            (int)(bb->swap_prob * 100.0f));
+            (int)(bb->swap_prob * 100.0f),
+            bb->pitch_lock, bb->grain_fx, bb->grain_cycle_ms);
     }
     
     return -1;
@@ -1756,6 +1831,52 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
     }
     bb_update_status(bb);
     bb->play_pos = (float)bb->slice_starts[bb->current_slice];
+    bb_grain_reset(&bb->grain);
+}
+
+static void bb_read_frame(const breakbeat_t *bb, uint32_t idx,
+                          float *left, float *right) {
+    int nch = bb->num_channels;
+    if (bb->audio_format == WAV_FORMAT_FLOAT) {
+        const float *data = (const float *)bb->data;
+        *left = data[idx * nch];
+        *right = data[idx * nch + (nch == 2)];
+    } else if (bb->bits_per_sample == 16) {
+        const int16_t *data = (const int16_t *)bb->data;
+        *left = data[idx * nch] / 32768.0f;
+        *right = data[idx * nch + (nch == 2)] / 32768.0f;
+    } else if (bb->bits_per_sample == 24) {
+        const uint8_t *data = (const uint8_t *)bb->data;
+        uint32_t base = idx * (uint32_t)nch * 3u;
+        int32_t l = data[base] | (data[base + 1] << 8) | (data[base + 2] << 16);
+        if (l & 0x800000) l |= (int32_t)0xFF000000;
+        int32_t r = l;
+        if (nch == 2) {
+            r = data[base + 3] | (data[base + 4] << 8) | (data[base + 5] << 16);
+            if (r & 0x800000) r |= (int32_t)0xFF000000;
+        }
+        *left = (float)l / 8388608.0f;
+        *right = (float)r / 8388608.0f;
+    } else if (bb->bits_per_sample == 32) {
+        const int32_t *data = (const int32_t *)bb->data;
+        *left = (float)data[idx * nch] / 2147483648.0f;
+        *right = (float)data[idx * nch + (nch == 2)] / 2147483648.0f;
+    } else {
+        *left = *right = 0.0f;
+    }
+}
+
+static uint32_t bb_grain_sample_index(const breakbeat_t *bb, float pos) {
+    uint32_t start = bb->slice_starts[bb->current_slice];
+    uint32_t length = bb->slice_lengths[bb->current_slice];
+    if (length == 0) return start;
+    float offset = pos - (float)start;
+    if (offset < 0.0f || offset >= (float)length) {
+        offset = fmodf(offset, (float)length);
+        if (offset < 0.0f) offset += (float)length;
+    }
+    uint32_t idx = start + (uint32_t)offset;
+    return (idx < bb->total_frames) ? idx : bb->total_frames - 1;
 }
 
 static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
@@ -1824,6 +1945,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
                     bb->pending_trigger = 0;
                     bb->current_slice = 0;
                     bb->play_pos = (float)bb->slice_starts[0];
+                    bb_grain_reset(&bb->grain);
                     bb->sub_slice_active = 0;
                     bb->sub_slice_counter = 0;
                     bb_update_status(bb);
@@ -1835,6 +1957,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     if (bb->just_reset) {
         bb->just_reset = 0;
         bb->play_pos = (float)bb->slice_starts[0];
+        bb_grain_reset(&bb->grain);
     }
 
     if ((running || previewing) && bb->pending_manual_slice >= 0) {
@@ -1846,6 +1969,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         if (bb_select_loop(bb, loop, running) == 0) {
             bb->current_slice = slice;
             bb->play_pos = (float)bb->slice_starts[slice];
+            bb_grain_reset(&bb->grain);
             bb->playing = 1;
             bb->sub_slice_active = 0;
             bb->manual_slice_active = running;
@@ -1868,9 +1992,8 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     float slice_len = (bb->current_slice < 8)
                     ? (float)bb->slice_lengths[bb->current_slice] : 0.0f;
     float rate = (slice_len > 0.0f && spt > 0.0f) ? slice_len / spt : 1.0f;
-    const int nch = bb->num_channels;
-    const int is_float = (bb->audio_format == WAV_FORMAT_FLOAT);
-    const int bits = bb->bits_per_sample;
+    int grain_enabled = bb->pitch_lock || bb->grain_fx > 0;
+    int cycle_frames = bb->grain_cycle_ms * MOVE_SAMPLE_RATE / 1000;
     
     for (int i = 0; i < frames; i++) {
         if (running && bb->manual_slice_active && bb->current_slice < 8) {
@@ -1887,47 +2010,20 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         }
         
         float fL, fR;
-        if (is_float) {
-            /* 32-bit IEEE float */
-            const float *fdata = (const float *)bb->data;
-            if (nch == 1) {
-                fL = fR = fdata[idx];
-            } else {
-                fL = fdata[idx * 2];
-                fR = fdata[idx * 2 + 1];
-            }
-        } else if (bits == 16) {
-            const int16_t *sdata = (const int16_t *)bb->data;
-            if (nch == 1) {
-                fL = fR = sdata[idx] / 32768.0f;
-            } else {
-                fL = sdata[idx * 2]     / 32768.0f;
-                fR = sdata[idx * 2 + 1] / 32768.0f;
-            }
-        } else if (bits == 24) {
-            /* 24-bit PCM, 3 bytes per sample, little-endian signed */
-            const uint8_t *bdata = (const uint8_t *)bb->data;
-            uint32_t base = idx * (uint32_t)nch * 3u;
-            int32_t l = bdata[base] | (bdata[base + 1] << 8) | (bdata[base + 2] << 16);
-            if (l & 0x800000) l |= (int32_t)0xFF000000;
-            int32_t r = l;
-            if (nch == 2) {
-                r = bdata[base + 3] | (bdata[base + 4] << 8) | (bdata[base + 5] << 16);
-                if (r & 0x800000) r |= (int32_t)0xFF000000;
-            }
-            fL = (float)l / 8388608.0f;
-            fR = (float)r / 8388608.0f;
-        } else if (bits == 32) {
-            /* 32-bit signed PCM */
-            const int32_t *sdata = (const int32_t *)bb->data;
-            if (nch == 1) {
-                fL = fR = (float)sdata[idx] / 2147483648.0f;
-            } else {
-                fL = (float)sdata[idx * 2]     / 2147483648.0f;
-                fR = (float)sdata[idx * 2 + 1] / 2147483648.0f;
+        if (grain_enabled) {
+            bb_grain_frame_t grain_frame = bb_grain_next(&bb->grain,
+                bb->play_pos, rate, cycle_frames, bb->pitch_lock, bb->grain_fx);
+            uint32_t grain_idx = bb_grain_sample_index(bb, grain_frame.current_pos);
+            bb_read_frame(bb, grain_idx, &fL, &fR);
+            if (grain_frame.previous_gain > 0.0f) {
+                float prevL, prevR;
+                uint32_t prev_idx = bb_grain_sample_index(bb, grain_frame.previous_pos);
+                bb_read_frame(bb, prev_idx, &prevL, &prevR);
+                fL = fL * grain_frame.current_gain + prevL * grain_frame.previous_gain;
+                fR = fR * grain_frame.current_gain + prevR * grain_frame.previous_gain;
             }
         } else {
-            fL = fR = 0.0f;
+            bb_read_frame(bb, idx, &fL, &fR);
         }
         
         int32_t L = (int32_t)(fL * 32767.0f);
@@ -1947,6 +2043,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
             if (bb->play_pos >= start + part_len) {
                 if (bb->sub_slice_counter < bb->retrigger_divisions - 1) {
                     bb->play_pos = start; // Loop back!
+                    bb_grain_reset(&bb->grain);
                     bb->sub_slice_counter++;
                 }
             }

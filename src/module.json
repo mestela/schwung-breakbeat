@@ -81,6 +81,29 @@
               "default": 0
             },
             {
+              "key": "pitch_lock",
+              "label": "Pitch Lock",
+              "type": "enum",
+              "options": ["Off", "On"],
+              "default": 0
+            },
+            {
+              "key": "grain_fx",
+              "label": "Grain FX",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "grain_cycle_ms",
+              "label": "Grain Cycle",
+              "type": "int",
+              "min": 10,
+              "max": 120,
+              "default": 40
+            },
+            {
               "key": "complexity",
               "label": "Complexity",
               "type": "int",
@@ -182,6 +205,9 @@
             "B_sample_path",
             "B_sample_length",
             "B_chance",
+            "pitch_lock",
+            "grain_fx",
+            "grain_cycle_ms",
             "complexity",
             "phrase",
             "anchor",

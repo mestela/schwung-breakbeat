@@ -32,6 +32,8 @@ This uses midi out to get timing from the Move side of things. I tried (and fail
 | **Retrig 3x** | 0–100 | Per-bar probability of a 3x stutter. |
 | **Retrig 4x** | 0–100 | Per-bar probability of a 4x stutter. |
 | **Retrig 8x** | 0–100 | Per-bar probability of an 8x (16th-note micro-stutter) on any given beat. |
+| **Grain FX** | 0–100 | Adds short repeated grains for a coarse early-sampler stretch texture, without changing when slices trigger. |
+| **Grain Cycle** | 10–120 ms | Length of each grain. Shorter cycles sound more buzzy; longer cycles make the repeats easier to hear. |
 
 All four retrigger knobs are independent — any combination can be active at once. If multiple rates roll true on the same beat, one is chosen at random. 100% on any knob guarantees that rate fires on every beat; values represent true per-bar odds regardless of loop length.
 
@@ -44,6 +46,7 @@ All four retrigger knobs are independent — any combination can be active at on
 | **B Sample** | filepath | Selects the loop used for phrase fills. |
 | **B Length** | enum | Trigger interval for B loop (1/4 bar to 8 bars). |
 | **B Chance** | 0–100 | Probability of swapping to B Loop on the last bar of a phrase. |
+| **Pitch Lock** | Off / On | Keeps the original sample pitch as tempo changes by replaying short grains at their original speed. Off retains the existing repitch behavior. |
 | **Phrase** | enum | Multi-bar phrase length (Off, 2, 4, 8, 16 bars). |
 
 ### Meta
@@ -164,6 +167,7 @@ ssh-keygen -R move.local
 
 ### Unreleased
 - **Tighter live-pad timing.** A pad note received after a slice has started sounding waits for the next clocked slice boundary.
+- **Independent stretch controls.** Pitch Lock preserves pitch across tempo changes; Grain FX adds repeated-grain texture, with a separate Grain Cycle length. All default off except the cycle length, so existing presets keep their sound.
 
 ### v0.4.20
 - **Two banks of playable slices.** Pads 1–8 play A and pads 9–16 play B, including audition while stopped and notes programmed in a clip.

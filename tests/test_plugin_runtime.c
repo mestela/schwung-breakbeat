@@ -212,6 +212,33 @@ int main(int argc, char **argv) {
           "state round-trips preset_index");
     CHECK(saved_len > 0 && strstr(saved, "\"alt_length\":2") != NULL,
           "state round-trips B length");
+    api->set_param(instance, "pitch_lock", "1");
+    api->set_param(instance, "grain_fx", "100");
+    api->set_param(instance, "grain_cycle_ms", "20");
+    saved_len = api->get_param(instance, "state", saved, sizeof(saved));
+    CHECK(saved_len > 0 && strstr(saved, "\"pitch_lock\":1") &&
+          strstr(saved, "\"grain_fx\":100") &&
+          strstr(saved, "\"grain_cycle_ms\":20"),
+          "stretch controls are saved in song state");
+    api->set_param(instance, "pitch_lock", "0");
+    api->set_param(instance, "grain_fx", "0");
+    api->set_param(instance, "grain_cycle_ms", "40");
+
+    char hierarchy[8192];
+    int hierarchy_len = api->get_param(instance, "ui_hierarchy", hierarchy,
+                                       sizeof(hierarchy));
+    CHECK(hierarchy_len > 0 && strstr(hierarchy, "\"pitch_lock\"") &&
+          strstr(hierarchy, "\"grain_fx\"") &&
+          hierarchy[hierarchy_len - 1] == '}',
+          "stretch controls appear in complete device UI hierarchy");
+    api->set_param(instance, "state", saved);
+    char stretch_value[16];
+    api->get_param(instance, "grain_cycle_ms", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "20") == 0,
+          "song state restores stretch settings");
+    api->set_param(instance, "pitch_lock", "0");
+    api->set_param(instance, "grain_fx", "0");
+    api->set_param(instance, "grain_cycle_ms", "40");
 
     snprintf(state, sizeof(state),
              "{\"preset_index\":0,\"sample_path\":\"%s\"," 
@@ -464,6 +491,35 @@ int main(int argc, char **argv) {
     CHECK(buffers_equal(switched_audio, expected_audio,
                         MOVE_FRAMES_PER_BLOCK * 2),
           "A filepath selection while running changes the mapped audio");
+
+    /* Render identical clean starts with each stretch mode. This catches a
+     * control that saves correctly but never reaches the audio path. */
+    int16_t dry_early[MOVE_FRAMES_PER_BLOCK * 2];
+    int16_t dry_late[MOVE_FRAMES_PER_BLOCK * 2];
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    for (int i = 0; i < 40; i++) {
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        if (i == 5) memcpy(dry_early, expected_audio, sizeof(dry_early));
+    }
+    memcpy(dry_late, expected_audio, sizeof(dry_late));
+
+    api->set_param(reference, "pitch_lock", "1");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    for (int i = 0; i <= 5; i++)
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    CHECK(!buffers_equal(dry_early, expected_audio, MOVE_FRAMES_PER_BLOCK * 2),
+          "Pitch Lock changes audio at a non-native tempo");
+
+    api->set_param(reference, "pitch_lock", "0");
+    api->set_param(reference, "grain_fx", "100");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    for (int i = 0; i < 40; i++)
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    CHECK(!buffers_equal(dry_late, expected_audio, MOVE_FRAMES_PER_BLOCK * 2),
+          "Grain FX changes audio independently of Pitch Lock");
     api->destroy_instance(reference);
 
     api->destroy_instance(instance);
