@@ -76,6 +76,9 @@ typedef struct {
     int sub_slice_counter;
     int retrigger_divisions;
     int preview_frames;       /* >0 = play preview even while transport stopped */
+    int queued_slice;         /* note 36-51 waiting for the next slice clock */
+    int pending_manual_slice; /* note selected at the current slice clock */
+    int manual_slice_active;  /* use the played loop's own length until handback */
     int suppress_next_preset_preview; /* first host preset assignment is restore */
 
     uint64_t sample_counter;
@@ -138,6 +141,7 @@ typedef struct {
     int main_loop_idx;
 
     char current_loop;   /* loop actually playing right now ('A' or 'B') */
+    char auto_loop;      /* loop chosen by the automatic phrase pattern */
     char pending_loop;   /* loop that will play when pending_sample_path loads */
     char status_str[32];
 
@@ -182,6 +186,18 @@ static float bb_current_move_bpm(void)
         info.tempo >= 20.0f && info.tempo <= 400.0f)
         return info.tempo;
     return 0.0f;
+}
+
+static void bb_refresh_bpm(breakbeat_t *bb)
+{
+    float bpm = bb_current_move_bpm();
+    /* Move's published set model may not be ready just after a set loads.
+     * Recheck the host fallback on every audition instead of retaining the
+     * tempo cached when this instance was created. */
+    if (bpm < 20.0f && g_host && g_host->get_bpm)
+        bpm = g_host->get_bpm();
+    if (bpm >= 20.0f && bpm <= 400.0f)
+        bb->stable_bpm = bpm;
 }
 
 static char g_preset_filenames[32][64];
@@ -646,6 +662,12 @@ static void install_loaded_sample(breakbeat_t *bb, char loop,
         bb->active_length = loaded->musical_length;
         bb->ticks_per_trigger = (int)(12.0f * bb->active_length + 0.5f);
         if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
+        if (bb->timing.running && bb->current_loop != bb->auto_loop) {
+            float auto_length = (bb->auto_loop == 'B')
+                              ? bb->alt_length : bb->main_length;
+            bb->ticks_per_trigger = (int)(12.0f * auto_length + 0.5f);
+            if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
+        }
         /* Keep the transport's slice identity. A new file should replace the
          * sound under the playhead, not restart the sequencer at slice zero. */
         bb->current_slice &= 7;
@@ -736,6 +758,7 @@ static void set_loop_musical_length(breakbeat_t *bb, char loop, float length) {
          * so this is audible immediately. The MIDI-clock trigger cadence uses
          * the new divisor beginning with the next tick. */
         bb->active_length = length;
+        if (bb->timing.running && bb->auto_loop != loop) return;
         bb->ticks_per_trigger = (int)(12.0f * length + 0.5f);
         if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
         /* Length changes begin a fresh, deterministic slice cycle without
@@ -749,6 +772,12 @@ static void set_loop_musical_length(breakbeat_t *bb, char loop, float length) {
         bb_update_status(bb);
     } else if (bb->standby_loop == loop) {
         bb->standby_sample.musical_length = length;
+        if (bb->timing.running && bb->auto_loop == loop) {
+            bb->ticks_per_trigger = (int)(12.0f * length + 0.5f);
+            if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
+            bb_timing_reset_trigger_phase(&bb->timing);
+            bb->pending_trigger = 0;
+        }
     }
 }
 
@@ -832,6 +861,28 @@ static int activate_standby_sample(breakbeat_t *bb) {
     if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
     bb->play_pos = (float)bb->slice_starts[0];
     return 0;
+}
+
+/* A manual A/B hit may temporarily change the mapped sample, but it must not
+ * change the automatic clock grid. Both samples are already resident. */
+static int bb_select_loop(breakbeat_t *bb, char wanted, int keep_grid) {
+    if (bb->current_loop == wanted) return 0;
+    if (bb->standby_loop != wanted) return -1;
+    int grid_ticks = bb->ticks_per_trigger;
+    char old_loop = bb->current_loop;
+    if (activate_standby_sample(bb) != 0) return -1;
+    bb->current_loop = wanted;
+    bb->standby_loop = old_loop;
+    if (keep_grid) bb->ticks_per_trigger = grid_ticks;
+    return 0;
+}
+
+static void bb_prepare_stopped_load(breakbeat_t *bb) {
+    if (bb_select_loop(bb, 'A', 0) != 0) {
+        bb->current_loop = 'A';
+        bb->standby_loop = 'B';
+    }
+    bb->auto_loop = 'A';
 }
 
 /* Load the sample at `path` (relative or absolute). Returns 0 on success. */
@@ -977,11 +1028,15 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->sub_slice_counter = 0;
     bb->retrigger_divisions = 2;
     bb->preview_frames = 0;
+    bb->queued_slice = -1;
+    bb->pending_manual_slice = -1;
+    bb->manual_slice_active = 0;
     bb->suppress_next_preset_preview = 1;
     bb->length = 1.0f;
     bb->main_length = 1.0f;
     bb->alt_length = 1.0f;
     bb->current_loop = 'A';
+    bb->auto_loop = 'A';
     bb->pending_loop = 'A';
     bb->standby_loop = 'B';
     bb->pending_sample_switch = 0;
@@ -1028,11 +1083,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
 
     /* Resolve the Schwung 1.6 Move-info reader outside the audio path and seed
      * playback from Move's actual live tempo. */
-    bb->stable_bpm = bb_current_move_bpm();
-    if (bb->stable_bpm < 20.0f && g_host && g_host->get_bpm) {
-        float bpm = g_host->get_bpm();
-        if (bpm >= 20.0f && bpm <= 400.0f) bb->stable_bpm = bpm;
-    }
+    bb_refresh_bpm(bb);
 
     /* Capture module_dir for relative-path resolution. */
     if (module_dir && module_dir[0]) {
@@ -1097,22 +1148,14 @@ static void bb_start_preview(breakbeat_t *bb) {
 }
 
 static void bb_reset_transport(breakbeat_t *bb) {
-    move_info_t info;
     /* Refresh at the Start/Continue event itself. When Move is stopped it can
      * leave the audio renderer idle, so a tempo edit may otherwise retain the
      * previous BPM until after the first downbeat. */
-    if (move_info_read(&info) && info.valid &&
-        info.tempo >= 20.0f && info.tempo <= 400.0f)
-        bb->stable_bpm = info.tempo;
+    bb_refresh_bpm(bb);
     /* Every new song run starts with A, even if Stop arrived during the B
      * fill. Both samples are resident, so this metadata swap is RT-safe. */
-    if (bb->current_loop != 'A' && bb->standby_loop == 'A') {
-        char old_loop = bb->current_loop;
-        if (activate_standby_sample(bb) == 0) {
-            bb->current_loop = 'A';
-            bb->standby_loop = old_loop;
-        }
-    }
+    bb_select_loop(bb, 'A', 0);
+    bb->auto_loop = 'A';
     bb->trigger_count     = 0;
     bb->bar_counter       = 0;
     bb->current_slice     = 0;
@@ -1129,6 +1172,9 @@ static void bb_reset_transport(breakbeat_t *bb) {
     bb->pending_sample_path[0] = '\0';
     bb->pending_sample_switch = 0;
     bb->preview_frames = 0;
+    bb->queued_slice = -1;
+    bb->pending_manual_slice = -1;
+    bb->manual_slice_active = 0;
     bb_update_status(bb);
 }
 
@@ -1139,6 +1185,7 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
 
     if (msg[0] >= 0xF8) {
         int beat_position = 0;
+        int was_awaiting_first_tick = bb->timing.awaiting_first_tick;
         int events = bb_timing_on_realtime(&bb->timing, msg[0],
                                             bb->ticks_per_trigger,
                                             &beat_position);
@@ -1148,11 +1195,26 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             bb->pending_trigger = 0;
             bb->pending_bar = 0;
             bb->preview_frames = 0;
+            bb->queued_slice = -1;
+            bb->pending_manual_slice = -1;
+            bb->manual_slice_active = 0;
             bb->sub_slice_active = 0;
         }
+        if (msg[0] == 0xF8 && was_awaiting_first_tick &&
+            bb->queued_slice >= 0) {
+            /* First clock after Start has no TRIGGER event. */
+            bb->pending_manual_slice = bb->queued_slice;
+            bb->queued_slice = -1;
+        }
         if (events & BB_TIMING_TRIGGER) {
-            bb->pending_beat_pos = beat_position;
-            bb->pending_trigger = 1;
+            if (bb->queued_slice >= 0) {
+                bb->pending_manual_slice = bb->queued_slice;
+                bb->queued_slice = -1;
+                bb->pending_trigger = 0;
+            } else {
+                bb->pending_beat_pos = beat_position;
+                bb->pending_trigger = 1;
+            }
         }
         if (events & BB_TIMING_BAR) bb->pending_bar = 1;
         return;
@@ -1165,12 +1227,33 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     uint8_t vel    = msg[2];
 
     if (status == 0x90 && vel > 0) {
-        /* Pad presses: notes 36-43 → slices 0-7 */
-        if (note >= 36 && note <= 43) {
-            int slice = note - 36;
-            bb->play_pos      = bb->slice_starts[slice];
-            bb->current_slice = slice;
-            bb->playing = 1;
+        /* Move sends the track's musical notes here, whether played on its
+         * pads or by a clip. Notes 36-43 select A; 44-51 select B. */
+        if (note >= 36 && note <= 51) {
+            int choice = note - 36;
+            char loop = (choice < 8) ? 'A' : 'B';
+            bb_refresh_bpm(bb);
+            if (!bb->timing.running) {
+                bb->pending_manual_slice = choice;
+                float length = (loop == 'B') ? bb->alt_length : bb->main_length;
+                bb->preview_frames = (int)ceilf(bb_timing_samples_per_trigger(
+                    bb->stable_bpm, length, MOVE_SAMPLE_RATE));
+            } else {
+                /* Notes a little after a boundary belong to that slice.
+                 * Earlier notes wait for the next boundary; this gives a
+                 * live pad a full slice before automation takes over. */
+                int grace = bb->ticks_per_trigger / 4;
+                if (grace < 1) grace = 1;
+                if (grace > 3) grace = 3;
+                if (!bb->timing.awaiting_first_tick &&
+                    bb->timing.tick_in_cycle <= grace) {
+                    bb->pending_manual_slice = choice;
+                    bb->queued_slice = -1;
+                    bb->pending_trigger = 0;
+                } else {
+                    bb->queued_slice = choice;
+                }
+            }
         }
     }
 }
@@ -1214,6 +1297,7 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         }
 
         if (!is_running) {
+            bb_prepare_stopped_load(bb);
             apply_sample_path(bb, bb->main_sample_path, bb->main_length);
             if (load_standby_sample(bb, bb->alt_sample_path, bb->alt_length) == 0)
                 bb->standby_loop = 'B';
@@ -1472,6 +1556,7 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             if (g_host && g_host->get_clock_status)
                 is_running = (g_host->get_clock_status() == 2);
             if (!is_running) {
+                bb_prepare_stopped_load(bb);
                 apply_sample_path(bb, bb->main_sample_path, bb->main_length);
                 if (load_standby_sample(bb, bb->alt_sample_path, bb->alt_length) == 0)
                     bb->standby_loop = 'B';
@@ -1695,16 +1780,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
 
     /* Schwung 1.6 publishes Move's own tempo at most every 20 ms. Keep the
      * last valid value across the brief invalid window during a Set load. */
-    {
-        float bpm = bb_current_move_bpm();
-        if (bpm >= 20.0f && bpm <= 400.0f)
-            bb->stable_bpm = bpm;
-        else if (bb->stable_bpm < 20.0f && g_host && g_host->get_bpm) {
-            bpm = g_host->get_bpm();
-            if (bpm >= 20.0f && bpm <= 400.0f)
-                bb->stable_bpm = bpm;
-        }
-    }
+    bb_refresh_bpm(bb);
     if (bb->stable_bpm < 20.0f || bb->stable_bpm > 400.0f)
         bb->stable_bpm = 120.0f;
 
@@ -1723,10 +1799,6 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         bb->preview_frames -= frames;
         if (bb->preview_frames < 0) bb->preview_frames = 0;
     }
-    float spt = bb_timing_samples_per_trigger(bb->stable_bpm,
-                                               bb->active_length,
-                                               MOVE_SAMPLE_RATE);
-
     /* Bar boundary ---------------------------------------------------- */
     if (running && bb->pending_bar) {
             bb->pending_bar = 0;
@@ -1741,12 +1813,13 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
                 /* Both loops are resident: enforce the phrase directly at
                  * the downbeat instead of carrying a one-bar-ahead pending
                  * switch that can become stale after parameter edits. */
-                if (bb->current_loop != wanted && bb->standby_loop == wanted) {
-                    char old_loop = bb->current_loop;
-                    if (activate_standby_sample(bb) == 0) {
-                        bb->current_loop = wanted;
-                        bb->standby_loop = old_loop;
-                    }
+                if (bb->auto_loop != wanted) {
+                    bb->auto_loop = wanted;
+                    bb_select_loop(bb, wanted, 0);
+                    bb->manual_slice_active = 0;
+                    bb->ticks_per_trigger = (int)(12.0f *
+                        ((wanted == 'B') ? bb->alt_length : bb->main_length) + 0.5f);
+                    if (bb->ticks_per_trigger < 1) bb->ticks_per_trigger = 1;
                     bb_timing_reset_trigger_phase(&bb->timing);
                     bb->pending_trigger = 0;
                     bb->current_slice = 0;
@@ -1764,13 +1837,34 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         bb->play_pos = (float)bb->slice_starts[0];
     }
 
-    if (running && bb->pending_trigger) {
+    if ((running || previewing) && bb->pending_manual_slice >= 0) {
+        int choice = bb->pending_manual_slice;
+        int slice = choice & 7;
+        char loop = (choice < 8) ? 'A' : 'B';
+        bb->pending_manual_slice = -1;
         bb->pending_trigger = 0;
+        if (bb_select_loop(bb, loop, running) == 0) {
+            bb->current_slice = slice;
+            bb->play_pos = (float)bb->slice_starts[slice];
+            bb->playing = 1;
+            bb->sub_slice_active = 0;
+            bb->manual_slice_active = running;
+            bb_update_status(bb);
+        }
+    } else if (running && bb->pending_trigger) {
+        bb->pending_trigger = 0;
+        bb_select_loop(bb, bb->auto_loop, 1);
+        bb->manual_slice_active = 0;
         bb_fire_trigger(bb, bb->pending_beat_pos);
     }
 
     /* Rate is exact from the current Set BPM on the first block. MIDI clock
      * corrects phase at each trigger but is never used as a warm-up estimator. */
+    float playback_length = (running && !bb->manual_slice_active)
+                      ? ((bb->auto_loop == 'B') ? bb->alt_length : bb->main_length)
+                      : bb->active_length;
+    float spt = bb_timing_samples_per_trigger(bb->stable_bpm,
+                                               playback_length, MOVE_SAMPLE_RATE);
     float slice_len = (bb->current_slice < 8)
                     ? (float)bb->slice_lengths[bb->current_slice] : 0.0f;
     float rate = (slice_len > 0.0f && spt > 0.0f) ? slice_len / spt : 1.0f;
@@ -1779,6 +1873,13 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     const int bits = bb->bits_per_sample;
     
     for (int i = 0; i < frames; i++) {
+        if (running && bb->manual_slice_active && bb->current_slice < 8) {
+            uint32_t start = bb->slice_starts[bb->current_slice];
+            uint32_t len = bb->slice_lengths[bb->current_slice];
+            if (len && bb->play_pos >= (float)(start + len))
+                bb->play_pos = (float)start +
+                               fmodf(bb->play_pos - (float)start, (float)len);
+        }
         uint32_t idx = (uint32_t)bb->play_pos;
         if (idx >= bb->total_frames) {
             bb->play_pos = 0; // Loop always for now

@@ -54,6 +54,17 @@ All four retrigger knobs are independent — any combination can be active at on
 | **Save Preset** | toggle | Saves current settings as a new JSON file in `presets/`. |
 | **Status** | read-only | Displays current playing loop, slice, and retrig status (e.g., `A_3_1x`). |
 
+### Playing slices from pads or a clip
+
+In drum-pad layout, pads 1–8 (notes 36–43) select A slices 0–7, and pads
+9–16 (notes 44–51) select B slices 0–7. A pad press auditions one slice while
+Play is stopped. With Play running, an early note waits for the next slice boundary.
+A note arriving just after a boundary plays immediately. The selected slice
+then has its turn, and the following boundary returns to the automatic pattern.
+Each pad slice plays at its own loop's A or B length, even when the automatic
+pattern uses the other loop's grid. Notes recorded on later steps can each
+select their own slice.
+
 ## Dynamic Presets & Custom Samples
 
 Presets are no longer hardcoded in C. They are stored as `.json` files in the `presets/` directory. The module scans this directory on startup and when saving a new preset.
@@ -150,6 +161,12 @@ ssh-keygen -R move.local
 ```
 
 ## Changelog
+
+### v0.4.20
+- **Two banks of playable slices.** Pads 1–8 play A and pads 9–16 play B, including audition while stopped and notes programmed in a clip.
+- **Quantized handoff.** Early pad hits land on the next slice boundary, then the automatic break resumes at the following boundary. Notes just after a boundary play immediately.
+- **Independent pad speed.** Manual A and B slices play at their own loop lengths while the automatic pattern keeps its original clock grid. A shorter pad slice repeats within its turn rather than playing at half speed.
+- **Tempo refresh.** Stopped pad presses recheck the host tempo when Move's published set tempo is temporarily unavailable.
 
 ### v0.4.14
 - **Native Move tempo.** Breakbeat reads the live Set BPM published by Schwung 1.6 instead of relying on the legacy inferred project-tempo callback.
