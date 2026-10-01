@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -84,7 +84,10 @@
               "key": "pitch_lock",
               "label": "Pitch Lock",
               "type": "enum",
-              "options": ["Off", "On"],
+              "options": [
+                "Off",
+                "On"
+              ],
               "default": 0
             },
             {
