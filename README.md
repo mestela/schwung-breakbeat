@@ -198,7 +198,7 @@ ssh-keygen -R move.local
 
 ## Changelog
 
-### Unreleased
+### v0.4.29
 - **Master and note grid.** Master adds A/B volume balance, grain controls, and 8ths/16ths timing for pads and recorded notes. Automatic slice timing is unchanged.
 - **Fullscreen Status.** Press Status for both waveforms, slice zones, an active-slice highlight, and retrigger/stretch information.
 - **Complete status readings.** Status now shows the sample, slice, and effect multiplier (`1X`, `2R`, `3S`) as one consistent readout.
