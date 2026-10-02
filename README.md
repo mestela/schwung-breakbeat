@@ -202,7 +202,7 @@ ssh-keygen -R move.local
 
 ## Changelog
 
-### Unreleased
+### v0.4.31
 - **Compact status.** Main uses `A2R4` and `B3S2` codes that fit Schwung's standard canvas cell. Stretch status reports occupied slices.
 - **Detailed fullscreen status.** The waveform view keeps fixed retrigger, stretch length, slice count, and pitch labels with values only while that effect plays.
 - **Cleaner pages.** Removed the accidental Main-2 page of waveform and detail data.
