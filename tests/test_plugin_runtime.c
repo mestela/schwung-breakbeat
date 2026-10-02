@@ -19,7 +19,8 @@ static int fail_count;
 } while (0)
 
 static void quiet_log(const char *msg) { (void)msg; }
-static int stopped_status(void) { return MOVE_CLOCK_STATUS_STOPPED; }
+static int g_clock_status = MOVE_CLOCK_STATUS_STOPPED;
+static int test_clock_status(void) { return g_clock_status; }
 static float g_host_bpm = 99.0f;
 static float test_bpm(void) { return g_host_bpm; }
 static float g_move_bpm = 137.0f;
@@ -98,7 +99,7 @@ int main(int argc, char **argv) {
     host.sample_rate = MOVE_SAMPLE_RATE;
     host.frames_per_block = MOVE_FRAMES_PER_BLOCK;
     host.log = quiet_log;
-    host.get_clock_status = stopped_status;
+    host.get_clock_status = test_clock_status;
     host.get_bpm = test_bpm;
     host.get_beat_position = test_beat_position;
 
@@ -819,6 +820,64 @@ int main(int argc, char **argv) {
     CHECK(strcmp(migrated, "14") == 0,
           "old long stretch settings migrate to a two-slot limit");
     api->destroy_instance(reference);
+
+    /* A Set loaded during playback misses the earlier Start byte. Its saved
+     * samples must load and the next clock tick must start automatic slices. */
+    g_clock_status = MOVE_CLOCK_STATUS_RUNNING;
+    g_beat_position = 0.0;
+    void *recalled = api->create_instance(temp_dir, "{}");
+    CHECK(recalled != NULL, "create a Set instrument during playback");
+    if (recalled) {
+        char original_wave[128], restored_wave[128];
+        char original_b_wave[128], restored_b_wave[128];
+        api->get_param(recalled, "wave_a", original_wave, sizeof(original_wave));
+        api->get_param(recalled, "wave_b", original_b_wave, sizeof(original_b_wave));
+        api->set_param(recalled, "state",
+                       "{\"sample_path\":\"/missing-breakbeat-recall.wav\","
+                       "\"alt_sample_path\":\"/missing-breakbeat-recall.wav\"}");
+        api->on_midi(recalled, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(recalled, audio, MOVE_FRAMES_PER_BLOCK);
+        CHECK(buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
+              "recalled Set cannot play the previous sample while files load");
+        snprintf(state, sizeof(state),
+                 "{\"preset_index\":0,\"sample_path\":\"%s\","
+                 "\"alt_sample_path\":\"%s\",\"length\":3,"
+                 "\"alt_length\":2,\"complexity\":73,\"A_vol\":62}",
+                 argv[2], argv[3]);
+        api->set_param(recalled, "preset", "0");
+        api->set_param(recalled, "state", state);
+        int loaded = 0;
+        for (int attempt = 0; attempt < 200; attempt++) {
+            api->get_param(recalled, "wave_a", restored_wave, sizeof(restored_wave));
+            if (strcmp(restored_wave, original_wave) != 0) {
+                loaded = 1;
+                break;
+            }
+            usleep(5000);
+        }
+        CHECK(loaded, "Set restore loads saved audio while transport runs");
+        loaded = 0;
+        for (int attempt = 0; attempt < 200; attempt++) {
+            api->get_param(recalled, "wave_b", restored_b_wave, sizeof(restored_b_wave));
+            if (strcmp(restored_b_wave, original_b_wave) != 0) {
+                loaded = 1;
+                break;
+            }
+            usleep(5000);
+        }
+        CHECK(loaded, "Set restore loads saved B audio while transport runs");
+        char setting[16];
+        api->get_param(recalled, "complexity", setting, sizeof(setting));
+        CHECK(strcmp(setting, "73") == 0,
+              "Set restore keeps saved controls while transport runs");
+        api->on_midi(recalled, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(recalled, audio, MOVE_FRAMES_PER_BLOCK);
+        CHECK(!buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
+              "automatic playback joins an already running Set");
+        api->destroy_instance(recalled);
+    }
+    g_clock_status = MOVE_CLOCK_STATUS_STOPPED;
+    g_beat_position = -1.0;
 
     api->destroy_instance(instance);
     dlclose(handle);

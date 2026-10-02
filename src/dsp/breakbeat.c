@@ -179,6 +179,7 @@ typedef struct {
      * control thread waits for any in-flight block to finish. */
     atomic_int sample_update;
     atomic_int sample_readers;
+    atomic_uint restore_pending_mask; /* silence stale preset audio until saved A/B load */
 
     /* Filepath parameters arrive on Schwung's realtime SPI callback.  Publish
      * fixed-size requests to a SCHED_OTHER worker; it performs open/mmap and
@@ -746,6 +747,7 @@ static void install_loaded_sample(breakbeat_t *bb, char loop,
     /* A length knob may have moved while the worker was opening this file. */
     loaded->musical_length = (loop == 'A') ? bb->main_length : bb->alt_length;
 
+    int installed = 0;
     if (bb->current_loop == loop) {
         close_file(bb);
         bb->fd = loaded->fd;
@@ -773,18 +775,29 @@ static void install_loaded_sample(breakbeat_t *bb, char loop,
         bb->current_slice &= 7;
         bb->play_pos = (float)bb->slice_starts[bb->current_slice];
         bb_grain_reset(&bb->grain);
-        if (!bb->timing.running) bb_start_preview(bb);
+        if (!bb->timing.running &&
+            atomic_load_explicit(&bb->restore_pending_mask,
+                                 memory_order_acquire) == 0 &&
+            (!g_host || !g_host->get_clock_status ||
+             g_host->get_clock_status() != MOVE_CLOCK_STATUS_RUNNING))
+            bb_start_preview(bb);
         loaded->fd = -1;
         loaded->map = NULL;
         loaded->data = NULL;
+        installed = 1;
     } else if (bb->standby_loop == loop) {
         close_sample_slot(&bb->standby_sample);
         bb->standby_sample = *loaded;
         loaded->fd = -1;
         loaded->map = NULL;
         loaded->data = NULL;
+        installed = 1;
     }
 
+    if (installed)
+        atomic_fetch_and_explicit(&bb->restore_pending_mask,
+                                  ~(loop == 'A' ? 1u : 2u),
+                                  memory_order_release);
     atomic_store_explicit(&bb->sample_update, 0, memory_order_release);
 }
 
@@ -1256,6 +1269,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->standby_sample.fd = -1;
     atomic_init(&bb->sample_update, 0);
     atomic_init(&bb->sample_readers, 0);
+    atomic_init(&bb->restore_pending_mask, 0);
     atomic_init(&bb->sample_loader_stop, 0);
     atomic_init(&bb->sample_loader_started, 0);
     atomic_init(&bb->sample_request_seq[0], 0);
@@ -1378,6 +1392,27 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     if (!bb || len < 1) return;
 
     if (msg[0] >= 0xF8) {
+        /* A Set instrument created during playback misses the MIDI Start.
+         * Join Move's running clock on its next tick. */
+        if (msg[0] == 0xF8 && !bb->timing.running && g_host &&
+            g_host->get_clock_status &&
+            g_host->get_clock_status() == MOVE_CLOCK_STATUS_RUNNING) {
+            double beat = g_host->get_beat_position
+                        ? g_host->get_beat_position() : -1.0;
+            int ticks = beat >= 0.0 ? (int)(beat * 24.0 + 0.5) : 0;
+            int divisor = bb->ticks_per_trigger > 0 ? bb->ticks_per_trigger : 1;
+            bb->timing.running = 1;
+            bb->timing.awaiting_first_tick = 0;
+            bb->timing.tick_in_bar = ticks % 96;
+            bb->timing.tick_in_cycle = ticks % divisor;
+            bb->timing.trigger_count = ticks / divisor + 1;
+            bb_reset_transport(bb);
+            if (ticks % divisor == 0) {
+                bb->pending_beat_pos = (ticks / divisor) & 7;
+                bb->pending_trigger = 1;
+            }
+            return;
+        }
         int beat_position = 0;
         int was_awaiting_first_tick = bb->timing.awaiting_first_tick;
         int events = bb_timing_on_realtime(&bb->timing, msg[0],
@@ -1508,7 +1543,8 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             if (preview_allowed) bb_start_preview(bb);
             else bb->preview_frames = 0;
         } else {
-            wp_log("breakbeat: stop transport before changing presets");
+            request_sample_load(bb, 0, bb->main_sample_path, bb->main_length);
+            request_sample_load(bb, 1, bb->alt_sample_path, bb->alt_length);
         }
     }
     else if (strcmp(key, "A_sample_path") == 0) {
@@ -1735,6 +1771,8 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         /* State restore is not a user audition. The chain host applies the
          * preset immediately before state, so cancel any preview it started. */
         bb->preview_frames = 0;
+        atomic_store_explicit(&bb->restore_pending_mask, 3u,
+                              memory_order_release);
         if (!json_get_int(val, "preset_index", &bb->preset_idx))
             json_get_int(val, "preset", &bb->preset_idx); /* v0.4 compatibility */
         if (g_total_presets > 0) {
@@ -1857,20 +1895,27 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             if (bb->swap_prob > 1.0f) bb->swap_prob = 1.0f;
         }
 
-        /* Apply the sample immediately when the transport is not running.
-         * Deferring via pending_sample_path requires a MIDI clock bar boundary
-         * that may never arrive if the module is just loading. */
+        /* Restore both samples even if this Set loads during playback. */
         {
             int is_running = 0;
             if (g_host && g_host->get_clock_status)
                 is_running = (g_host->get_clock_status() == 2);
             if (!is_running) {
                 bb_prepare_stopped_load(bb);
-                apply_sample_path(bb, bb->main_sample_path, bb->main_length);
-                if (load_standby_sample(bb, bb->alt_sample_path, bb->alt_length) == 0)
+                if (apply_sample_path(bb, bb->main_sample_path,
+                                      bb->main_length) == 0)
+                    atomic_fetch_and_explicit(&bb->restore_pending_mask, ~1u,
+                                              memory_order_release);
+                if (load_standby_sample(bb, bb->alt_sample_path, bb->alt_length) == 0) {
                     bb->standby_loop = 'B';
+                    atomic_fetch_and_explicit(&bb->restore_pending_mask, ~2u,
+                                              memory_order_release);
+                }
                 bb->pending_sample_path[0] = '\0';
                 bb->pending_sample_switch = 0;
+            } else {
+                request_sample_load(bb, 0, bb->main_sample_path, bb->main_length);
+                request_sample_load(bb, 1, bb->alt_sample_path, bb->alt_length);
             }
         }
     }
@@ -2246,6 +2291,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
 
     atomic_fetch_add_explicit(&bb->sample_readers, 1, memory_order_acquire);
     if (atomic_load_explicit(&bb->sample_update, memory_order_acquire) ||
+        atomic_load_explicit(&bb->restore_pending_mask, memory_order_acquire) ||
         !bb->data || bb->total_frames == 0) {
         atomic_fetch_sub_explicit(&bb->sample_readers, 1, memory_order_release);
         memset(out_lr, 0, frames * 2 * sizeof(int16_t));
