@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.27",
+  "version": "0.4.29",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -83,7 +83,8 @@
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 50
+              "default": 50,
+              "short_name": "Cmplx"
             },
             {
               "key": "phrase",
@@ -102,13 +103,18 @@
             {
               "key": "status",
               "label": "Playback Status",
-              "type": "enum",
-              "options": [
-                "-"
-              ],
-              "default": 0,
+              "type": "canvas",
               "short_name": "Status",
-              "access": "read"
+              "display": "readout",
+              "canvas_script": "status_view.js",
+              "show_value": true,
+              "show_footer": false,
+              "fullscreen_live_ms": 50,
+              "extra_keys": [
+                "status",
+                "wave_a",
+                "wave_b"
+              ]
             },
             {
               "level": "anchors",
@@ -121,6 +127,24 @@
             {
               "level": "stretch",
               "label": "Stretch"
+            },
+            {
+              "key": "wave_a",
+              "label": "Waveform A",
+              "type": "string",
+              "access": "read",
+              "live": true
+            },
+            {
+              "key": "wave_b",
+              "label": "Waveform B",
+              "type": "string",
+              "access": "read",
+              "live": true
+            },
+            {
+              "level": "master",
+              "label": "Master"
             }
           ],
           "knobs": [
@@ -284,19 +308,6 @@
               "max": 100,
               "default": 50,
               "short_name": "PtchMax"
-            },
-            {
-              "key": "grain_fx",
-              "label": "Grain Effect",
-              "type": "int",
-              "min": 0,
-              "max": 100,
-              "default": 0,
-              "short_name": "Grn FX"
-            },
-            {
-              "level": "stretch_fx",
-              "label": "Stretch FX"
             }
           ],
           "knobs": [
@@ -306,12 +317,11 @@
             "stretch_slice_min",
             "stretch_slice_max",
             "stretch_pitch_min",
-            "stretch_pitch_max",
-            "grain_fx"
+            "stretch_pitch_max"
           ]
         },
-        "stretch_fx": {
-          "name": "Stretch FX",
+        "master": {
+          "name": "Master",
           "params": [
             {
               "key": "grain_cycle_ms",
@@ -323,20 +333,50 @@
               "short_name": "GrnCyc"
             },
             {
-              "key": "pitch_lock",
-              "label": "Pitch Lock",
+              "key": "grain_fx",
+              "label": "Grain Effect",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Grn FX"
+            },
+            {
+              "key": "A_vol",
+              "label": "Sample A Volume",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 100,
+              "short_name": "A Vol"
+            },
+            {
+              "key": "B_vol",
+              "label": "Sample B Volume",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 100,
+              "short_name": "B Vol"
+            },
+            {
+              "key": "quant",
+              "label": "Note Quantization",
               "type": "enum",
               "options": [
-                "Off",
-                "On"
+                "8ths",
+                "16ths"
               ],
               "default": 0,
-              "short_name": "PiLck"
+              "short_name": "Quant"
             }
           ],
           "knobs": [
+            "grain_fx",
             "grain_cycle_ms",
-            "pitch_lock"
+            "A_vol",
+            "B_vol",
+            "quant"
           ]
         }
       }

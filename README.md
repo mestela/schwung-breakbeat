@@ -26,7 +26,10 @@ This uses midi out to get timing from the Move side of things. I tried (and fail
 |---|---|---|
 | **Complexity** | 0–100 | Probability that any given trigger picks a *random* slice instead of advancing in order. At 0, slices follow beat position (or Anchor if engaged). At 100, every non-stay trigger rolls a fresh random slice. |
 
-Main also shows the current sample, slice, and playback mode. For example,
+Main also shows the current sample, slice, and playback mode. Press Status to
+open a fullscreen view of both sample waveforms and their eight slice zones;
+the active zone highlights and the right side shows retrigger or stretch.
+For example,
 `A 3 1X` means A slice 3 is playing normally, `A 3 2R` means it is retriggering
 twice, and `B 2 3S` means B slice 2 is stretched 3×. Custom Preset and Save Preset controls
 have been removed from the page; Schwung saves the parameters with the Set.
@@ -70,14 +73,15 @@ is chosen at random.
 | **Ln Min / Ln Max** | 0–100 | Lowest and highest stretch multipliers. 0 maps to 2× and 100 maps to 16×; every integer multiplier in between is available. |
 | **Sl Min / Sl Max** | 0–100 | Lowest and highest grid durations. 0 maps to one slice and 100 maps to eight slices. |
 | **PtchMin / PtchMax** | 0–100 | Lowest and highest random pitch shifts. 0 maps to −12 semitones, 50 to zero, and 100 to +12 semitones. |
-| **Grn FX** | 0–100 | Adds short repeated grains for a coarse early-sampler texture. |
 
-### Stretch FX page
+### Master page
 
 | Control | Range | What it does |
 |---|---|---|
+| **Grn FX** | 0–100 | Adds short repeated grains for a coarse early-sampler texture. |
 | **GrnCyc** | 10–120 ms | Length of each grain. Shorter cycles sound more buzzy; longer cycles make repeats clearer. |
-| **PiLck** | Off / On | Keeps normal slices near their original pitch as tempo changes. A randomly stretched slice always uses pitch-preserving grains and the chosen pitch shift. |
+| **A Vol / B Vol** | 0–100 | Balances the levels of the two samples independently. |
+| **Quant** | 8ths / 16ths | Sets the timing grid for live pads and recorded notes. Automatic slice timing stays the same. |
 
 Stretched slices remain on the original grid. The stretch multiplier controls
 the audio rate, while the slice range controls how long it plays. Automatic
@@ -89,12 +93,13 @@ stretching and retrigger subdivision are mutually exclusive for each slice.
 
 In drum-pad layout, pads 1–8 (notes 36–43) select A slices 0–7, and pads
 9–16 (notes 44–51) select B slices 0–7. A pad press auditions one slice while
-Play is stopped. With Play running, a note waits for the next slice boundary
+Play is stopped. With Play running, a note waits for the next selected note-grid boundary
 unless that boundary has not rendered yet. The selected slice
 then has its turn, and the following boundary returns to the automatic pattern.
 Each pad slice plays at its own loop's A or B length, even when the automatic
-pattern uses the other loop's grid. Notes recorded on later steps can each
-select their own slice.
+pattern uses the other loop's grid. In 16ths mode, a short manual slice plays
+once instead of repeating to fill the slot. Notes recorded on later steps can
+each select their own slice.
 
 ## Saved Settings & Custom Samples
 
@@ -194,9 +199,11 @@ ssh-keygen -R move.local
 ## Changelog
 
 ### Unreleased
+- **Master and note grid.** Master adds A/B volume balance, grain controls, and 8ths/16ths timing for pads and recorded notes. Automatic slice timing is unchanged.
+- **Fullscreen Status.** Press Status for both waveforms, slice zones, an active-slice highlight, and retrigger/stretch information.
 - **Complete status readings.** Status now shows the sample, slice, and effect multiplier (`1X`, `2R`, `3S`) as one consistent readout.
 - **Tighter live-pad timing.** A pad note received after a slice has started sounding waits for the next clocked slice boundary.
-- **Independent stretch controls.** Pitch Lock preserves pitch across tempo changes; Grain FX adds repeated-grain texture, with a separate Grain Cycle length. All default off except the cycle length, so existing presets keep their sound.
+- **Independent stretch controls.** Grain FX adds repeated-grain texture, with a separate Grain Cycle length. Both now appear on Master.
 - **Independent random stretch ranges.** Stretch can choose any integer multiplier from 2× to 16× and occupy one to eight grid slices, with separate pitch endpoints from −12 to +12 semitones. Pads and phrase changes still interrupt on the grid.
 - **Clearer pages and status.** Main includes the status readout, Anchors holds Anchor/Roll/Fill, and the eight Stretch knobs show full names when touched. Schwung's Set saving replaces the module's custom Preset controls.
 

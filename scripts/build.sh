@@ -5,6 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
+if [ ! -f "/.dockerenv" ]; then
+    python3 scripts/sync_metadata.py
+fi
 
 IMAGE_NAME="schwung-breakbeat-builder"
 MODULE_ID="breakbeat"
@@ -120,6 +123,7 @@ fi
 echo "  name/abbrev set to: Breakbeat v${_MINOR}.${_PATCH} / ${_ABBREV}"
 
 cat src/ui.js > "$DIST_DIR/ui.js"
+cat src/status_view.js > "$DIST_DIR/status_view.js"
 
 # Bundle samples
 mkdir -p "$DIST_DIR/samples"

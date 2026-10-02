@@ -130,6 +130,13 @@ int main(int argc, char **argv) {
              "\"complexity\":0}",
              argv[2], argv[3]);
     api->set_param(instance, "state", state);
+    char wave_a[128], wave_b[128];
+    api->get_param(instance, "wave_a", wave_a, sizeof(wave_a));
+    api->get_param(instance, "wave_b", wave_b, sizeof(wave_b));
+    CHECK(strlen(wave_a) == 64 && strlen(wave_b) == 64 &&
+          strspn(wave_a, "0123456789abcdef") == 64 &&
+          strspn(wave_b, "0123456789abcdef") == 64,
+          "both loaded samples publish bounded waveform summaries");
     memset(audio, 1, sizeof(audio));
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     CHECK(buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
@@ -144,6 +151,12 @@ int main(int argc, char **argv) {
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
     CHECK(strncmp(pad_status, "A 2 ", 4) == 0,
           "stopped pad selects the corresponding slice");
+    api->set_param(instance, "A_vol", "0");
+    api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
+    CHECK(buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
+          "A volume mutes A pad playback");
+    api->set_param(instance, "A_vol", "100");
     for (int i = 0; i < 512; i++)
         api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     CHECK(buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
@@ -165,6 +178,12 @@ int main(int argc, char **argv) {
     memcpy(b_pad_audio, audio, sizeof(b_pad_audio));
     CHECK(!buffers_equal(a_pad_audio, audio, MOVE_FRAMES_PER_BLOCK * 2),
           "ninth pad reads B sample audio rather than A sample audio");
+    api->set_param(instance, "B_vol", "0");
+    api->on_midi(instance, pad_b_slice_zero, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
+    CHECK(buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
+          "B volume mutes B pad playback");
+    api->set_param(instance, "B_vol", "100");
     api->set_param(instance, "state", state);
     api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_EXTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
@@ -206,6 +225,27 @@ int main(int argc, char **argv) {
           "two-bar A grid resumes after a one-bar B pad slice");
     api->on_midi(instance, &trial_stop, 1, MOVE_MIDI_SOURCE_HOST);
 
+    /* The note grid can run twice as fast while automatic slices retain
+     * their normal twelve-clock cadence. */
+    api->set_param(instance, "quant", "16ths");
+    api->on_midi(instance, &trial_start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(instance, &trial_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
+    send_clock_ticks(api, instance, 3, audio);
+    api->on_midi(instance, pad_b_slice_zero, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    send_clock_ticks(api, instance, 2, audio);
+    api->get_param(instance, "status", pad_status, sizeof(pad_status));
+    CHECK(pad_status[0] == 'A', "16th note waits for the next six-clock boundary");
+    send_clock_ticks(api, instance, 1, audio);
+    api->get_param(instance, "status", pad_status, sizeof(pad_status));
+    CHECK(strncmp(pad_status, "B 0 ", 4) == 0,
+          "16th note triggers between automatic eighth-note slices");
+    send_clock_ticks(api, instance, 18, audio);
+    api->get_param(instance, "status", pad_status, sizeof(pad_status));
+    CHECK(pad_status[0] == 'A', "automatic slice resumes on its original two-bar grid");
+    api->on_midi(instance, &trial_stop, 1, MOVE_MIDI_SOURCE_HOST);
+    api->set_param(instance, "quant", "8ths");
+
     char saved[2048];
     int saved_len = api->get_param(instance, "state", saved, sizeof(saved));
     CHECK(saved_len > 0 && strstr(saved, "\"preset_index\":0") != NULL,
@@ -244,8 +284,11 @@ int main(int argc, char **argv) {
     char hierarchy[8192];
     int hierarchy_len = api->get_param(instance, "ui_hierarchy", hierarchy,
                                        sizeof(hierarchy));
-    CHECK(hierarchy_len > 0 && strstr(hierarchy, "\"pitch_lock\"") &&
+    CHECK(hierarchy_len > 0 && !strstr(hierarchy, "\"pitch_lock\"") &&
           strstr(hierarchy, "\"grain_fx\"") &&
+          strstr(hierarchy, "\"master\":{\"name\":\"Master\"") &&
+          strstr(hierarchy, "\"A_vol\"") && strstr(hierarchy, "\"B_vol\"") &&
+          strstr(hierarchy, "\"quant\"") &&
           strstr(hierarchy, "\"level\":\"stretch\"") &&
           strstr(hierarchy, "\"stretch_chance\"") &&
           strstr(hierarchy, "\"level\":\"retrig\"") &&
@@ -461,6 +504,7 @@ int main(int argc, char **argv) {
     CHECK(strncmp(status, "B 0 ", 4) == 0,
           "B begins on bar four regardless of its two-bar source length");
 
+    api->set_param(instance, "quant", "1"); /* finer note grid, auto grid unchanged */
     api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_INTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
@@ -476,6 +520,7 @@ int main(int argc, char **argv) {
     api->get_param(instance, "status", status, sizeof(status));
     CHECK(strncmp(status, "B 2 ", 4) == 0,
           "B fill resumes after the manual A slice");
+    api->set_param(instance, "quant", "0");
     api->set_param(instance, "B_sample_length", "3"); /* restore 2 bars */
 
     send_clock_ticks(api, instance, 83, audio);
