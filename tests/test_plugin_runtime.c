@@ -215,17 +215,23 @@ int main(int argc, char **argv) {
     api->set_param(instance, "pitch_lock", "1");
     api->set_param(instance, "grain_fx", "100");
     api->set_param(instance, "grain_cycle_ms", "20");
-    api->set_param(instance, "stretch_3x", "65");
+    api->set_param(instance, "stretch_chance", "65");
+    api->set_param(instance, "stretch_length_range", "50");
+    api->set_param(instance, "stretch_pitch_range", "75");
     saved_len = api->get_param(instance, "state", saved, sizeof(saved));
     CHECK(saved_len > 0 && strstr(saved, "\"pitch_lock\":1") &&
           strstr(saved, "\"grain_fx\":100") &&
           strstr(saved, "\"grain_cycle_ms\":20") &&
-          strstr(saved, "\"stretch_3x\":65"),
+          strstr(saved, "\"stretch_chance\":65") &&
+          strstr(saved, "\"stretch_length_range\":50") &&
+          strstr(saved, "\"stretch_pitch_range\":75"),
           "stretch controls are saved in song state");
     api->set_param(instance, "pitch_lock", "0");
     api->set_param(instance, "grain_fx", "0");
     api->set_param(instance, "grain_cycle_ms", "40");
-    api->set_param(instance, "stretch_3x", "0");
+    api->set_param(instance, "stretch_chance", "0");
+    api->set_param(instance, "stretch_length_range", "0");
+    api->set_param(instance, "stretch_pitch_range", "0");
 
     char hierarchy[8192];
     int hierarchy_len = api->get_param(instance, "ui_hierarchy", hierarchy,
@@ -233,21 +239,32 @@ int main(int argc, char **argv) {
     CHECK(hierarchy_len > 0 && strstr(hierarchy, "\"pitch_lock\"") &&
           strstr(hierarchy, "\"grain_fx\"") &&
           strstr(hierarchy, "\"level\":\"stretch\"") &&
-          strstr(hierarchy, "\"stretch_8x\"") &&
+          strstr(hierarchy, "\"stretch_chance\"") &&
+          strstr(hierarchy, "\"level\":\"retrig\"") &&
+          strstr(hierarchy, "\"name\":\"Main\"") &&
           hierarchy[hierarchy_len - 1] == '}',
           "stretch controls appear in complete device UI hierarchy");
+    const char *retrig_page = strstr(hierarchy, "\"retrig\":{\"name\":\"Retrig\"");
+    CHECK(retrig_page && !strstr(retrig_page, "\"preset\"") &&
+          strstr(retrig_page, "\"stretch\":{\"name\":\"Stretch\""),
+          "named Retrig page has no Preset control and precedes Stretch");
     api->set_param(instance, "state", saved);
     char stretch_value[16];
     api->get_param(instance, "grain_cycle_ms", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "20") == 0,
           "song state restores stretch settings");
-    api->get_param(instance, "stretch_3x", stretch_value, sizeof(stretch_value));
+    api->get_param(instance, "stretch_chance", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "65") == 0,
           "song state restores stretch probability");
+    api->get_param(instance, "stretch_pitch_range", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "75") == 0,
+          "song state restores pitch range");
     api->set_param(instance, "pitch_lock", "0");
     api->set_param(instance, "grain_fx", "0");
     api->set_param(instance, "grain_cycle_ms", "40");
-    api->set_param(instance, "stretch_3x", "0");
+    api->set_param(instance, "stretch_chance", "0");
+    api->set_param(instance, "stretch_length_range", "0");
+    api->set_param(instance, "stretch_pitch_range", "0");
 
     snprintf(state, sizeof(state),
              "{\"preset_index\":0,\"sample_path\":\"%s\"," 
@@ -534,34 +551,92 @@ int main(int argc, char **argv) {
     api->set_param(reference, "complexity", "0");
     api->set_param(reference, "anchor", "0");
     api->set_param(reference, "roll", "0");
-    const char *stretch_keys[4] = {
-        "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
-    };
-    const int stretch_spans[4] = {2, 3, 4, 8};
-    for (int kind = 0; kind < 4; kind++) {
-        for (int i = 0; i < 4; i++)
-            api->set_param(reference, stretch_keys[i], i == kind ? "100" : "0");
+    api->set_param(reference, "stretch_chance", "0");
+    api->set_param(reference, "stretch_length_range", "100");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "A_0_1x", 6) == 0,
+          "zero stretch chance leaves the automatic break alone");
+
+    api->set_param(reference, "stretch_chance", "100");
+    api->set_param(reference, "stretch_length_range", "0");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "A_0_2s", 6) == 0,
+          "minimum length range holds only two slice slots");
+    send_clock_ticks(api, reference, 12, expected_audio);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "A_0_2s", 6) == 0,
+          "two-slot stretch skips its occupied boundary");
+    send_clock_ticks(api, reference, 12, expected_audio);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "A_2_2s", 6) == 0,
+          "automatic slicing resumes after the two-slot hold");
+
+    api->set_param(reference, "stretch_length_range", "50");
+    int saw_four = 0;
+    for (int trial = 0; trial < 64; trial++) {
         api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
         api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
         api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
         api->get_param(reference, "status", status, sizeof(status));
-        CHECK(status[0] == 'A' && status[2] == '0' &&
-              status[4] == '0' + stretch_spans[kind] && status[5] == 's',
-              "100% stretch holds the first slice for its selected span");
-        for (int slot = 1; slot < stretch_spans[kind]; slot++) {
-            send_clock_ticks(api, reference, 12, expected_audio);
-            api->get_param(reference, "status", status, sizeof(status));
-            CHECK(status[2] == '0' && status[5] == 's',
-                  "stretch does not retrigger at an occupied slice boundary");
-        }
-        send_clock_ticks(api, reference, 12, expected_audio);
+        CHECK(status[5] == 's' &&
+              (status[4] == '2' || status[4] == '3' || status[4] == '4'),
+              "half length range allows only two-, three-, or four-slot holds");
+        if (status[4] == '4') saw_four = 1;
+    }
+    CHECK(saw_four, "half length range can select four slots");
+
+    api->set_param(reference, "stretch_length_range", "99");
+    for (int trial = 0; trial < 32; trial++) {
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
         api->get_param(reference, "status", status, sizeof(status));
-        CHECK(status[2] == '0' + (stretch_spans[kind] & 7) && status[5] == 's',
-              "automatic slicing resumes after the full stretch span");
+        CHECK(status[4] != '8',
+              "eight-slot holds stay locked until maximum length range");
     }
 
-    for (int i = 0; i < 4; i++)
-        api->set_param(reference, stretch_keys[i], i == 2 ? "100" : "0");
+    api->set_param(reference, "stretch_length_range", "100");
+    int saw_eight = 0;
+    for (int trial = 0; trial < 64; trial++) {
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        api->get_param(reference, "status", status, sizeof(status));
+        CHECK(status[5] == 's' &&
+              (status[4] == '2' || status[4] == '3' ||
+               status[4] == '4' || status[4] == '8'),
+              "maximum length range stays within the four supported spans");
+        if (status[4] == '8') saw_eight = 1;
+    }
+    CHECK(saw_eight, "maximum length range can select eight slots");
+
+    api->set_param(reference, "stretch_length_range", "0");
+    api->set_param(reference, "stretch_pitch_range", "0");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    for (int i = 0; i < 6; i++)
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    int16_t unpitched[MOVE_FRAMES_PER_BLOCK * 2];
+    memcpy(unpitched, expected_audio, sizeof(unpitched));
+    api->set_param(reference, "stretch_pitch_range", "100");
+    int heard_pitch_change = 0;
+    for (int trial = 0; trial < 16 && !heard_pitch_change; trial++) {
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        for (int i = 0; i < 6; i++)
+            api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        heard_pitch_change = !buffers_equal(unpitched, expected_audio,
+                                           MOVE_FRAMES_PER_BLOCK * 2);
+    }
+    CHECK(heard_pitch_change, "pitch range can change the held slice's pitch");
+
+    api->set_param(reference, "stretch_pitch_range", "0");
     api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
     api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
@@ -574,21 +649,38 @@ int main(int argc, char **argv) {
           "pad note replaces the held stretch on the next grid boundary");
     send_clock_ticks(api, reference, 12, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A_2_4s", 6) == 0,
+    CHECK(strncmp(status, "A_2_2s", 6) == 0,
           "automatic stretch resumes after the manual pad's slice");
 
-    api->set_param(reference, "stretch_4x", "0");
-    api->set_param(reference, "stretch_8x", "100");
+    api->set_param(reference, "stretch_length_range", "100");
     api->set_param(reference, "A_sample_length", "3"); /* 2 bars: four slots per bar */
     api->set_param(reference, "phrase", "1"); /* 2 bars */
     api->set_param(reference, "B_chance", "100");
-    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
-    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
-    api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
-    send_clock_ticks(api, reference, 96, expected_audio);
-    api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strncmp(status, "B_0_8s", 6) == 0,
-          "B phrase boundary interrupts an A stretch halfway through");
+    int got_eight = 0;
+    for (int trial = 0; trial < 64 && !got_eight; trial++) {
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        api->get_param(reference, "status", status, sizeof(status));
+        got_eight = strncmp(status, "A_0_8s", 6) == 0;
+    }
+    CHECK(got_eight, "maximum length range offers a long hold for phrase test");
+    if (got_eight) {
+        send_clock_ticks(api, reference, 96, expected_audio);
+        api->get_param(reference, "status", status, sizeof(status));
+        CHECK(status[0] == 'B' && status[2] == '0' && status[5] == 's',
+              "B phrase boundary interrupts an A stretch halfway through");
+    }
+    api->set_param(reference, "state",
+                   "{\"stretch_2x\":0,\"stretch_3x\":0,"
+                   "\"stretch_4x\":0,\"stretch_8x\":100}");
+    char migrated[16];
+    api->get_param(reference, "stretch_chance", migrated, sizeof(migrated));
+    CHECK(strcmp(migrated, "100") == 0,
+          "old stretch settings retain their overall chance");
+    api->get_param(reference, "stretch_length_range", migrated, sizeof(migrated));
+    CHECK(strcmp(migrated, "0") == 0,
+          "old long stretch settings migrate to a two-slot limit");
     api->destroy_instance(reference);
 
     api->destroy_instance(instance);

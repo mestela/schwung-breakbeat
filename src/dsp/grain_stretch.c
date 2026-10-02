@@ -10,7 +10,8 @@ void bb_grain_reset(bb_grain_t *grain) {
 
 bb_grain_frame_t bb_grain_next(bb_grain_t *grain, float source_pos,
                                float source_rate, int cycle_frames,
-                               int pitch_lock, int repeat_amount) {
+                               int pitch_lock, float pitch_ratio,
+                               int repeat_amount) {
     if (cycle_frames < 32) cycle_frames = 32;
     if (repeat_amount < 0) repeat_amount = 0;
     if (repeat_amount > 100) repeat_amount = 100;
@@ -31,7 +32,7 @@ bb_grain_frame_t bb_grain_next(bb_grain_t *grain, float source_pos,
             grain->current_start = grain->previous_start;
     }
 
-    float read_rate = pitch_lock ? 1.0f : source_rate;
+    float read_rate = pitch_lock ? pitch_ratio : source_rate;
     bb_grain_frame_t frame;
     frame.current_pos = grain->current_start + grain->phase * read_rate;
     frame.previous_pos = grain->previous_start +

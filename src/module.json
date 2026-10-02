@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.23",
+  "version": "0.4.24",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "ui_hierarchy": {
       "levels": {
         "root": {
-          "label": "Breakbeat Gen",
+          "label": "Main",
           "params": [
             {
               "key": "preset",
@@ -81,6 +81,10 @@
               "default": 0
             },
             {
+              "level": "retrig",
+              "label": "Retrig"
+            },
+            {
               "level": "stretch",
               "label": "Stretch"
             },
@@ -130,6 +134,44 @@
               "default": 0
             },
             {
+              "key": "save_preset",
+              "label": "Save Preset",
+              "type": "int",
+              "min": 0,
+              "max": 1,
+              "default": 0
+            },
+            {
+              "key": "status",
+              "label": "Status",
+              "type": "enum",
+              "options": [
+                "-"
+              ],
+              "default": 0
+            }
+          ],
+          "knobs": [
+            "preset",
+            "A_sample_path",
+            "A_sample_length",
+            "B_sample_path",
+            "B_sample_length",
+            "B_chance",
+            "complexity",
+            "phrase",
+            "anchor",
+            "roll",
+            "fill",
+            "save_preset",
+            "status"
+          ],
+          "name": "Main"
+        },
+        "retrig": {
+          "name": "Retrig",
+          "params": [
+            {
               "key": "retrig_2x",
               "label": "Retrig 2x",
               "type": "int",
@@ -160,75 +202,37 @@
               "min": 0,
               "max": 100,
               "default": 0
-            },
-            {
-              "key": "save_preset",
-              "label": "Save Preset",
-              "type": "int",
-              "min": 0,
-              "max": 1,
-              "default": 0
-            },
-            {
-              "key": "status",
-              "label": "Status",
-              "type": "enum",
-              "options": [
-                "-"
-              ],
-              "default": 0
             }
           ],
           "knobs": [
-            "preset",
-            "A_sample_path",
-            "A_sample_length",
-            "B_sample_path",
-            "B_sample_length",
-            "B_chance",
-            "complexity",
-            "phrase",
-            "anchor",
-            "roll",
-            "fill",
             "retrig_2x",
             "retrig_3x",
             "retrig_4x",
-            "retrig_8x",
-            "save_preset",
-            "status"
+            "retrig_8x"
           ]
         },
         "stretch": {
           "name": "Stretch",
           "params": [
             {
-              "key": "stretch_2x",
-              "label": "Stretch 2x",
+              "key": "stretch_chance",
+              "label": "Chance",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0
             },
             {
-              "key": "stretch_3x",
-              "label": "Stretch 3x",
+              "key": "stretch_length_range",
+              "label": "Ln Rng",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0
             },
             {
-              "key": "stretch_4x",
-              "label": "Stretch 4x",
-              "type": "int",
-              "min": 0,
-              "max": 100,
-              "default": 0
-            },
-            {
-              "key": "stretch_8x",
-              "label": "Stretch 8x",
+              "key": "stretch_pitch_range",
+              "label": "Pch Rng",
               "type": "int",
               "min": 0,
               "max": 100,
@@ -236,7 +240,7 @@
             },
             {
               "key": "grain_fx",
-              "label": "Grain FX",
+              "label": "Grn FX",
               "type": "int",
               "min": 0,
               "max": 100,
@@ -244,7 +248,7 @@
             },
             {
               "key": "grain_cycle_ms",
-              "label": "Grain Cycle",
+              "label": "GrnCyc",
               "type": "int",
               "min": 10,
               "max": 120,
@@ -252,7 +256,7 @@
             },
             {
               "key": "pitch_lock",
-              "label": "Pitch Lock",
+              "label": "PiLck",
               "type": "enum",
               "options": [
                 "Off",
@@ -262,10 +266,9 @@
             }
           ],
           "knobs": [
-            "stretch_2x",
-            "stretch_3x",
-            "stretch_4x",
-            "stretch_8x",
+            "stretch_chance",
+            "stretch_length_range",
+            "stretch_pitch_range",
             "grain_fx",
             "grain_cycle_ms",
             "pitch_lock"
