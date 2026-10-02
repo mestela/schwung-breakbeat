@@ -73,9 +73,12 @@ typedef struct {
     uint32_t slice_lengths[8];
     int current_slice;
     float retrig_p[4];        /* [0]=2x [1]=3x [2]=4x [3]=8x, each 0..1 */
-    float stretch_chance;     /* per-bar chance of a held slice */
-    float stretch_length_range; /* chooses from 2/3/4/8 slots */
-    float stretch_pitch_range;  /* maximum pitch change, up to 12 semitones */
+    float stretch_chance;     /* per-slice chance of grain stretching */
+    int stretch_length_min, stretch_length_max; /* UI 0..100 maps to 2x..16x */
+    int stretch_slice_min, stretch_slice_max;   /* UI 0..100 maps to 1..8 slots */
+    int stretch_pitch_min, stretch_pitch_max;   /* UI 0..100 maps to -12..+12 */
+    int stretch_length;       /* chosen stretch rate, independent of grid hold */
+    int stretch_pitch_semitones;
     float stretch_pitch_ratio;  /* pitch chosen for the current held slice */
     int sub_slice_active;
     int sub_slice_counter;
@@ -274,16 +277,16 @@ static float bb_rand(void *ctx) {
     return (float)(bb_random_u32(bb) & 0x00ffffffu) / 16777216.0f;
 }
 
+static int bb_clamp_percent(int value);
+
 static void bb_update_status(breakbeat_t *bb) {
     int div = bb->sub_slice_active ? bb->retrigger_divisions : 1;
-    bb->status_str[0] = bb->current_loop;
-    bb->status_str[1] = '_';
-    bb->status_str[2] = (char)('0' + (bb->current_slice & 7));
-    bb->status_str[3] = '_';
-    bb->status_str[4] = (char)('0' +
-        ((bb->stretch_span > 1) ? bb->stretch_span : div));
-    bb->status_str[5] = (bb->stretch_span > 1) ? 's' : 'x';
-    bb->status_str[6] = '\0';
+    if (bb->stretch_length > 1)
+        snprintf(bb->status_str, sizeof(bb->status_str), "%c %d ST",
+                 bb->current_loop, bb->current_slice & 7);
+    else
+        snprintf(bb->status_str, sizeof(bb->status_str), "%c %d %dx",
+                 bb->current_loop, bb->current_slice & 7, div);
 }
 
 /* JSON helpers for state parsing */
@@ -408,80 +411,64 @@ static void resolve_sample_path(const char *module_dir, const char *path, char *
 
 static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
     (void)bb;
-    const char *ar = BB_PORTAL_DIR;
-    const char *br = BB_PORTAL_DIR;
-    snprintf(out, out_len,
-        "{\"modes\":null,\"levels\":{\"root\":{\"name\":\"Main\","
-        "\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\","
-        "\"knobs\":[\"preset\",\"A_sample_path\",\"A_sample_length\",\"B_sample_path\",\"B_sample_length\","
-        "\"B_chance\",\"complexity\",\"phrase\",\"anchor\",\"roll\",\"fill\",\"save_preset\",\"status\"],"
-        "\"params\":["
-        "{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
-        "{\"key\":\"A_sample_path\",\"label\":\"A Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
-        "{\"key\":\"A_sample_length\",\"label\":\"A Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
-        "{\"key\":\"B_sample_path\",\"label\":\"B Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
-        "{\"key\":\"B_sample_length\",\"label\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
-        "{\"key\":\"B_chance\",\"label\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"level\":\"retrig\",\"label\":\"Retrig\"},"
-        "{\"level\":\"stretch\",\"label\":\"Stretch\"},"
-        "{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
-        "{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"fill\",\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"save_preset\",\"label\":\"Save Preset\",\"type\":\"int\",\"min\":0,\"max\":1},"
-        "{\"key\":\"status\",\"label\":\"Status\",\"type\":\"enum\",\"options\":[\"-\"]}"
-        "]},\"retrig\":{\"name\":\"Retrig\","
-        "\"knobs\":[\"retrig_2x\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\"],"
-        "\"params\":["
-        "{\"key\":\"retrig_2x\",\"label\":\"Retrig 2x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_3x\",\"label\":\"Retrig 3x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_4x\",\"label\":\"Retrig 4x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_8x\",\"label\":\"Retrig 8x\",\"type\":\"int\",\"min\":0,\"max\":100}"
-        "]},\"stretch\":{\"name\":\"Stretch\","
-        "\"knobs\":[\"stretch_chance\",\"stretch_length_range\",\"stretch_pitch_range\",\"grain_fx\",\"grain_cycle_ms\",\"pitch_lock\"],"
-        "\"params\":["
-        "{\"key\":\"stretch_chance\",\"label\":\"Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"stretch_length_range\",\"label\":\"Ln Rng\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"stretch_pitch_range\",\"label\":\"Pch Rng\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"grain_fx\",\"label\":\"Grn FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"grain_cycle_ms\",\"label\":\"GrnCyc\",\"type\":\"int\",\"min\":10,\"max\":120},"
-        "{\"key\":\"pitch_lock\",\"label\":\"PiLck\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]}"
-        "]}}}",
-        ar, br);
+    snprintf(out, out_len, "%s",
+        "{\"modes\":null,\"levels\":{\"root\":{\"name\":\"Main\",\"knobs\":[\"A_sample_path\",\"A_sample_length\",\"B_sample_p"
+        "ath\",\"B_sample_length\",\"B_chance\",\"complexity\",\"phrase\",\"status\"],\"params\":[{\"key\":\"A_sample_path\",\""
+        "label\":\"A Sample\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\"},{\"key"
+        "\":\"A_sample_length\",\"label\":\"A Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\""
+        ",\"4 bars\",\"8 bars\"]},{\"key\":\"B_sample_path\",\"label\":\"B Sample\",\"type\":\"filepath\",\"root\":\"/data/UserD"
+        "ata/breakbeat-samples\",\"filter\":\".wav\"},{\"key\":\"B_sample_length\",\"label\":\"B Length\",\"type\":\"enum\",\"o"
+        "ptions\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},{\"key\":\"B_chance\",\"label\":\"B Chanc"
+        "e\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"ma"
+        "x\":100},{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\""
+        "16 bars\"]},{\"key\":\"status\",\"label\":\"Status\",\"type\":\"enum\",\"options\":[\"-\"]},{\"level\":\"anchors\",\"label"
+        "\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretch\",\"label\":\"Stretch\"}]},\"anchors\":{"
+        "\"name\":\"Anchors\",\"knobs\":[\"anchor\",\"roll\",\"fill\"],\"params\":[{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":"
+        "\"int\",\"min\":0,\"max\":100},{\"key\":\"roll\",\"label\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"fill\","
+        "\"label\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"ret"
+        "rig_3x\",\"retrig_4x\",\"retrig_8x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Retrig 2x\",\"type\":\"int\",\"min\""
+        ":0,\"max\":100},{\"key\":\"retrig_3x\",\"label\":\"Retrig 3x\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrig_"
+        "4x\",\"label\":\"Retrig 4x\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"retrig_8x\",\"label\":\"Retrig 8x\",\"type"
+        "\":\"int\",\"min\":0,\"max\":100}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_length_m"
+        "in\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_"
+        "max\",\"grain_fx\"],\"params\":[{\"key\":\"stretch_chance\",\"label\":\"Chance\",\"name\":\"Chance\",\"type\":\"int\",\"mi"
+        "n\":0,\"max\":100},{\"key\":\"stretch_length_min\",\"label\":\"Ln Min\",\"name\":\"Length Minimum\",\"type\":\"int\",\"m"
+        "in\":0,\"max\":100},{\"key\":\"stretch_length_max\",\"label\":\"Ln Max\",\"name\":\"Length Maximum\",\"type\":\"int\",\""
+        "min\":0,\"max\":100},{\"key\":\"stretch_slice_min\",\"label\":\"Sl Min\",\"name\":\"Slice Minimum\",\"type\":\"int\",\"m"
+        "in\":0,\"max\":100},{\"key\":\"stretch_slice_max\",\"label\":\"Sl Max\",\"name\":\"Slice Maximum\",\"type\":\"int\",\"mi"
+        "n\":0,\"max\":100},{\"key\":\"stretch_pitch_min\",\"label\":\"PtchMin\",\"name\":\"Pitch Minimum\",\"type\":\"int\",\"mi"
+        "n\":0,\"max\":100},{\"key\":\"stretch_pitch_max\",\"label\":\"PtchMax\",\"name\":\"Pitch Maximum\",\"type\":\"int\",\"mi"
+        "n\":0,\"max\":100},{\"key\":\"grain_fx\",\"label\":\"Grn FX\",\"name\":\"Grain FX\",\"type\":\"int\",\"min\":0,\"max\":100}"
+        ",{\"level\":\"stretch_fx\",\"label\":\"Stretch FX\"}]},\"stretch_fx\":{\"name\":\"Stretch FX\",\"knobs\":[\"grain_cyc"
+        "le_ms\",\"pitch_lock\"],\"params\":[{\"key\":\"grain_cycle_ms\",\"label\":\"GrnCyc\",\"name\":\"Grain Cycle\",\"type\":"
+        "\"int\",\"min\":10,\"max\":120},{\"key\":\"pitch_lock\",\"label\":\"PiLck\",\"name\":\"Pitch Lock\",\"type\":\"enum\",\"opt"
+        "ions\":[\"Off\",\"On\"]}]}}}");
 }
 
 static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
     (void)bb;
-    const char *ar = BB_PORTAL_DIR;
-    const char *br = BB_PORTAL_DIR;
-    snprintf(out, out_len,
-        "["
-        "{\"key\":\"preset\",\"name\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
-        "{\"key\":\"A_sample_path\",\"name\":\"A Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
-        "{\"key\":\"A_sample_length\",\"name\":\"A Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
-        "{\"key\":\"B_sample_path\",\"name\":\"B Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
-        "{\"key\":\"B_sample_length\",\"name\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
-        "{\"key\":\"B_chance\",\"name\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"stretch_chance\",\"name\":\"Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"stretch_length_range\",\"name\":\"Ln Rng\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"stretch_pitch_range\",\"name\":\"Pch Rng\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"pitch_lock\",\"name\":\"PiLck\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
-        "{\"key\":\"grain_fx\",\"name\":\"Grn FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"grain_cycle_ms\",\"name\":\"GrnCyc\",\"type\":\"int\",\"min\":10,\"max\":120},"
-        "{\"key\":\"complexity\",\"name\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"phrase\",\"name\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
-        "{\"key\":\"anchor\",\"name\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"roll\",\"name\":\"Roll\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"fill\",\"name\":\"Fill\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_2x\",\"name\":\"Retrig 2x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_3x\",\"name\":\"Retrig 3x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_4x\",\"name\":\"Retrig 4x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"retrig_8x\",\"name\":\"Retrig 8x\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"save_preset\",\"name\":\"Save Preset\",\"type\":\"int\",\"min\":0,\"max\":1},"
-        "{\"key\":\"status\",\"name\":\"Status\",\"type\":\"enum\",\"options\":[\"-\"]}"
-        "]",
-        ar, br);
+    snprintf(out, out_len, "%s",
+        "[{\"key\":\"A_sample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\","
+        "\"name\":\"A Sample\"},{\"key\":\"A_sample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 "
+        "bars\",\"4 bars\",\"8 bars\"],\"name\":\"A Length\"},{\"key\":\"B_sample_path\",\"type\":\"filepath\",\"root\":\"/data/U"
+        "serData/breakbeat-samples\",\"filter\":\".wav\",\"name\":\"B Sample\"},{\"key\":\"B_sample_length\",\"type\":\"enum\""
+        ",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"name\":\"B Length\"},{\"key\":\"B_cha"
+        "nce\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max"
+        "\":100,\"name\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\""
+        ",\"16 bars\"],\"name\":\"Phrase\"},{\"key\":\"status\",\"type\":\"enum\",\"options\":[\"-\"],\"name\":\"Status\"},{\"key\":\""
+        "anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Anchor\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100"
+        ",\"name\":\"Roll\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Fill\"},{\"key\":\"retrig_2x\",\"type"
+        "\":\"int\",\"min\":0,\"max\":100,\"name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"nam"
+        "e\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Retrig 4x\"},{\"key\":\"retrig"
+        "_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Retrig 8x\"},{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0"
+        ",\"max\":100,\"name\":\"Chance\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Lengt"
+        "h Minimum\"},{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Length Maximum\"},{\"ke"
+        "y\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_"
+        "max\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\":\"int\","
+        "\"min\":0,\"max\":100,\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int\",\"min\":0,\"max\":100,"
+        "\"name\":\"Pitch Maximum\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Grain FX\"},{\"key\":\""
+        "grain_cycle_ms\",\"type\":\"int\",\"min\":10,\"max\":120,\"name\":\"Grain Cycle\"},{\"key\":\"pitch_lock\",\"type\":\"en"
+        "um\",\"options\":[\"Off\",\"On\"],\"name\":\"Pitch Lock\"}]");
 }
 
 /* Create the filepath browser "portal" with symlinks to bundled samples and
@@ -965,8 +952,9 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
         bb->grain_cycle_ms = ival;
     }
     bb->stretch_chance = 0.0f;
-    bb->stretch_length_range = 0.0f;
-    bb->stretch_pitch_range = 0.0f;
+    bb->stretch_length_min = bb->stretch_length_max = 0;
+    bb->stretch_slice_min = bb->stretch_slice_max = 0;
+    bb->stretch_pitch_min = bb->stretch_pitch_max = 50;
     if (json_get_float(json, "stretch_chance", &fval)) {
         if (fval < 0.0f) fval = 0.0f;
         if (fval > 100.0f) fval = 100.0f;
@@ -977,22 +965,33 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
         static const char *old_keys[4] = {
             "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
         };
-        for (int i = 0; i < 4; i++)
-            if (json_get_float(json, old_keys[i], &fval) &&
-                fval / 100.0f > bb->stretch_chance)
-                bb->stretch_chance = fval / 100.0f;
+        for (int i = 0; i < 4; i++) {
+            if (json_get_float(json, old_keys[i], &fval)) {
+                bb->stretch_slice_min = bb->stretch_slice_max = 14;
+                if (fval / 100.0f > bb->stretch_chance)
+                    bb->stretch_chance = fval / 100.0f;
+            }
+        }
         if (bb->stretch_chance > 1.0f) bb->stretch_chance = 1.0f;
     }
     if (json_get_float(json, "stretch_length_range", &fval)) {
         if (fval < 0.0f) fval = 0.0f;
         if (fval > 100.0f) fval = 100.0f;
-        bb->stretch_length_range = fval / 100.0f;
+        bb->stretch_slice_min = 14;
+        bb->stretch_slice_max = 14 + (int)(fval * 0.86f);
     }
     if (json_get_float(json, "stretch_pitch_range", &fval)) {
         if (fval < 0.0f) fval = 0.0f;
         if (fval > 100.0f) fval = 100.0f;
-        bb->stretch_pitch_range = fval / 100.0f;
+        bb->stretch_pitch_min = 50 - (int)(fval * 0.5f + 0.5f);
+        bb->stretch_pitch_max = 50 + (int)(fval * 0.5f + 0.5f);
     }
+    if (json_get_int(json, "stretch_length_min", &ival)) bb->stretch_length_min = bb_clamp_percent(ival);
+    if (json_get_int(json, "stretch_length_max", &ival)) bb->stretch_length_max = bb_clamp_percent(ival);
+    if (json_get_int(json, "stretch_slice_min", &ival)) bb->stretch_slice_min = bb_clamp_percent(ival);
+    if (json_get_int(json, "stretch_slice_max", &ival)) bb->stretch_slice_max = bb_clamp_percent(ival);
+    if (json_get_int(json, "stretch_pitch_min", &ival)) bb->stretch_pitch_min = bb_clamp_percent(ival);
+    if (json_get_int(json, "stretch_pitch_max", &ival)) bb->stretch_pitch_max = bb_clamp_percent(ival);
 
     if (json_get_string(json, "A_sample_path", str_val, sizeof(str_val)))
         resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
@@ -1102,10 +1101,12 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->preset_idx = 0;
     bb->retrig_p[0] = bb->retrig_p[1] = bb->retrig_p[2] = bb->retrig_p[3] = 0.0f;
     bb->stretch_chance = 0.0f;
-    bb->stretch_length_range = 0.0f;
-    bb->stretch_pitch_range = 0.0f;
+    bb->stretch_length_min = bb->stretch_length_max = 0;
+    bb->stretch_slice_min = bb->stretch_slice_max = 0;
+    bb->stretch_pitch_min = bb->stretch_pitch_max = 50;
     bb->stretch_pitch_ratio = 1.0f;
     bb->stretch_span = 1;
+    bb->stretch_length = 1;
     bb->stretch_remaining = 0;
     bb->sub_slice_active = 0;
     bb->sub_slice_counter = 0;
@@ -1123,7 +1124,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->pending_loop = 'A';
     bb->standby_loop = 'B';
     bb->pending_sample_switch = 0;
-    strcpy(bb->status_str, "A_0_1x");
+    strcpy(bb->status_str, "A 0 1x");
     bb->sample_counter = 0;
     bb->trigger_phase = 0.0f;
     bb->bar_phase = 0.0f;
@@ -1229,6 +1230,7 @@ static void bb_start_preview(breakbeat_t *bb) {
     bb_grain_reset(&bb->grain);
     bb->current_slice       = 0;
     bb->stretch_span        = 1;
+    bb->stretch_length      = 1;
     bb->stretch_remaining   = 0;
     bb->trigger_phase       = 0.0f;
     bb->bar_phase           = 0.0f;
@@ -1250,6 +1252,7 @@ static void bb_reset_transport(breakbeat_t *bb) {
     bb->bar_counter       = 0;
     bb->current_slice     = 0;
     bb->stretch_span      = 1;
+    bb->stretch_length    = 1;
     bb->stretch_remaining = 0;
     bb->stretch_pitch_ratio = 1.0f;
     bb_grain_reset(&bb->grain);
@@ -1294,6 +1297,7 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             bb->manual_slice_active = 0;
             bb->sub_slice_active = 0;
             bb->stretch_span = 1;
+            bb->stretch_length = 1;
             bb->stretch_remaining = 0;
             bb->stretch_pitch_ratio = 1.0f;
         }
@@ -1467,16 +1471,12 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->stretch_chance < 0.0f) bb->stretch_chance = 0.0f;
         if (bb->stretch_chance > 1.0f) bb->stretch_chance = 1.0f;
     }
-    else if (strcmp(key, "stretch_length_range") == 0) {
-        bb->stretch_length_range = atof(val) / 100.0f;
-        if (bb->stretch_length_range < 0.0f) bb->stretch_length_range = 0.0f;
-        if (bb->stretch_length_range > 1.0f) bb->stretch_length_range = 1.0f;
-    }
-    else if (strcmp(key, "stretch_pitch_range") == 0) {
-        bb->stretch_pitch_range = atof(val) / 100.0f;
-        if (bb->stretch_pitch_range < 0.0f) bb->stretch_pitch_range = 0.0f;
-        if (bb->stretch_pitch_range > 1.0f) bb->stretch_pitch_range = 1.0f;
-    }
+    else if (strcmp(key, "stretch_length_min") == 0) bb->stretch_length_min = bb_clamp_percent(atoi(val));
+    else if (strcmp(key, "stretch_length_max") == 0) bb->stretch_length_max = bb_clamp_percent(atoi(val));
+    else if (strcmp(key, "stretch_slice_min") == 0) bb->stretch_slice_min = bb_clamp_percent(atoi(val));
+    else if (strcmp(key, "stretch_slice_max") == 0) bb->stretch_slice_max = bb_clamp_percent(atoi(val));
+    else if (strcmp(key, "stretch_pitch_min") == 0) bb->stretch_pitch_min = bb_clamp_percent(atoi(val));
+    else if (strcmp(key, "stretch_pitch_max") == 0) bb->stretch_pitch_max = bb_clamp_percent(atoi(val));
     else if (strcmp(key, "anchor") == 0) {
         bb->anchor = atof(val) / 100.0f;
         if (bb->anchor < 0.0f) bb->anchor = 0.0f;
@@ -1586,8 +1586,12 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
                 fprintf(f, "  \"grain_fx\": %d,\n", bb->grain_fx);
                 fprintf(f, "  \"grain_cycle_ms\": %d,\n", bb->grain_cycle_ms);
                 fprintf(f, "  \"stretch_chance\": %d,\n", (int)(bb->stretch_chance * 100.0f));
-                fprintf(f, "  \"stretch_length_range\": %d,\n", (int)(bb->stretch_length_range * 100.0f));
-                fprintf(f, "  \"stretch_pitch_range\": %d,\n", (int)(bb->stretch_pitch_range * 100.0f));
+                fprintf(f, "  \"stretch_length_min\": %d,\n", bb->stretch_length_min);
+                fprintf(f, "  \"stretch_length_max\": %d,\n", bb->stretch_length_max);
+                fprintf(f, "  \"stretch_slice_min\": %d,\n", bb->stretch_slice_min);
+                fprintf(f, "  \"stretch_slice_max\": %d,\n", bb->stretch_slice_max);
+                fprintf(f, "  \"stretch_pitch_min\": %d,\n", bb->stretch_pitch_min);
+                fprintf(f, "  \"stretch_pitch_max\": %d,\n", bb->stretch_pitch_max);
                 fprintf(f, "  \"complexity\": %d,\n", (int)(bb->complexity * 100.0f));
                 fprintf(f, "  \"phrase\": \"%s\",\n", phrases[phrase_idx]);
                 fprintf(f, "  \"anchor\": %d,\n", (int)(bb->anchor * 100.0f));
@@ -1678,19 +1682,24 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             if (old_max >= 0) {
                 if (old_max > 100) old_max = 100;
                 bb->stretch_chance = (float)old_max / 100.0f;
-                bb->stretch_length_range = 0.0f;
+                bb->stretch_slice_min = bb->stretch_slice_max = 14;
             }
         }
         if (json_get_int(val, "stretch_length_range", &i)) {
-            if (i < 0) i = 0;
-            if (i > 100) i = 100;
-            bb->stretch_length_range = (float)i / 100.0f;
+            bb->stretch_slice_min = 14;
+            bb->stretch_slice_max = 14 + bb_clamp_percent(i) * 86 / 100;
         }
         if (json_get_int(val, "stretch_pitch_range", &i)) {
-            if (i < 0) i = 0;
-            if (i > 100) i = 100;
-            bb->stretch_pitch_range = (float)i / 100.0f;
+            int half = bb_clamp_percent(i) / 2;
+            bb->stretch_pitch_min = 50 - half;
+            bb->stretch_pitch_max = 50 + half;
         }
+        if (json_get_int(val, "stretch_length_min", &i)) bb->stretch_length_min = bb_clamp_percent(i);
+        if (json_get_int(val, "stretch_length_max", &i)) bb->stretch_length_max = bb_clamp_percent(i);
+        if (json_get_int(val, "stretch_slice_min", &i)) bb->stretch_slice_min = bb_clamp_percent(i);
+        if (json_get_int(val, "stretch_slice_max", &i)) bb->stretch_slice_max = bb_clamp_percent(i);
+        if (json_get_int(val, "stretch_pitch_min", &i)) bb->stretch_pitch_min = bb_clamp_percent(i);
+        if (json_get_int(val, "stretch_pitch_max", &i)) bb->stretch_pitch_max = bb_clamp_percent(i);
         if (json_get_int(val, "anchor", &i)) {
             bb->anchor = (float)i / 100.0f;
             if (bb->anchor < 0.0f) bb->anchor = 0.0f;
@@ -1784,6 +1793,10 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "status") == 0) {
         return snprintf(buf, buf_len, "%s", bb->status_str);
     }
+    else if (strcmp(key, "stretch_info") == 0) {
+        return snprintf(buf, buf_len, "L%d S%d P%d", bb->stretch_length,
+                        bb->stretch_span, bb->stretch_pitch_semitones);
+    }
     else if (strcmp(key, "A_sample_path") == 0 || strcmp(key, "loop") == 0) {
         char dbg[BB_PATH_MAX + 64];
         snprintf(dbg, sizeof(dbg), "breakbeat: get_param sample_path -> %s", bb->main_sample_path);
@@ -1826,12 +1839,12 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
              strcmp(key, "stretch_2x") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->stretch_chance * 100.0f));
     }
-    else if (strcmp(key, "stretch_length_range") == 0) {
-        return snprintf(buf, buf_len, "%d", (int)(bb->stretch_length_range * 100.0f));
-    }
-    else if (strcmp(key, "stretch_pitch_range") == 0) {
-        return snprintf(buf, buf_len, "%d", (int)(bb->stretch_pitch_range * 100.0f));
-    }
+    else if (strcmp(key, "stretch_length_min") == 0) return snprintf(buf, buf_len, "%d", bb->stretch_length_min);
+    else if (strcmp(key, "stretch_length_max") == 0) return snprintf(buf, buf_len, "%d", bb->stretch_length_max);
+    else if (strcmp(key, "stretch_slice_min") == 0) return snprintf(buf, buf_len, "%d", bb->stretch_slice_min);
+    else if (strcmp(key, "stretch_slice_max") == 0) return snprintf(buf, buf_len, "%d", bb->stretch_slice_max);
+    else if (strcmp(key, "stretch_pitch_min") == 0) return snprintf(buf, buf_len, "%d", bb->stretch_pitch_min);
+    else if (strcmp(key, "stretch_pitch_max") == 0) return snprintf(buf, buf_len, "%d", bb->stretch_pitch_max);
     else if (strcmp(key, "anchor") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->anchor * 100.0f));
     }
@@ -1898,7 +1911,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             "\"length\":%d,\"alt_length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,"
             "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"swap_prob\":%d,"
             "\"pitch_lock\":%d,\"grain_fx\":%d,\"grain_cycle_ms\":%d,"
-            "\"stretch_chance\":%d,\"stretch_length_range\":%d,\"stretch_pitch_range\":%d}",
+            "\"stretch_chance\":%d,\"stretch_length_min\":%d,\"stretch_length_max\":%d,\"stretch_slice_min\":%d,\"stretch_slice_max\":%d,\"stretch_pitch_min\":%d,\"stretch_pitch_max\":%d}",
             bb->preset_idx,
             bb->main_sample_path, bb->alt_sample_path,
             len_idx, alt_len_idx,
@@ -1909,40 +1922,48 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             (int)(bb->swap_prob * 100.0f),
             bb->pitch_lock, bb->grain_fx, bb->grain_cycle_ms,
             (int)(bb->stretch_chance * 100.0f),
-            (int)(bb->stretch_length_range * 100.0f),
-            (int)(bb->stretch_pitch_range * 100.0f));
+            bb->stretch_length_min, bb->stretch_length_max, bb->stretch_slice_min, bb->stretch_slice_max, bb->stretch_pitch_min, bb->stretch_pitch_max);
     }
     
     return -1;
 }
 
+static int bb_clamp_percent(int value) {
+    return value < 0 ? 0 : (value > 100 ? 100 : value);
+}
+
+static int bb_map_range(int value, int low, int high) {
+    return low + (bb_clamp_percent(value) * (high - low) + 50) / 100;
+}
+
+static int bb_pick_range(breakbeat_t *bb, int a, int b) {
+    if (a > b) { int tmp = a; a = b; b = tmp; }
+    return a + (int)(bb_random_u32(bb) % (uint32_t)(b - a + 1));
+}
+
 static void bb_roll_stretch(breakbeat_t *bb) {
-    static const int spans[4] = {2, 3, 4, 8};
-    float slots_per_bar = (bb->active_length > 0.0f)
-                        ? 8.0f / bb->active_length : 8.0f;
-    float inverse_slots = 1.0f / slots_per_bar;
     bb->stretch_span = 1;
+    bb->stretch_length = 1;
     bb->stretch_remaining = 0;
     bb->stretch_pitch_ratio = 1.0f;
+    bb->stretch_pitch_semitones = 0;
     float chance = bb->stretch_chance;
     if (chance <= 0.0f) return;
-    float p_slot = (chance >= 1.0f) ? 1.0f
-                 : 1.0f - powf(1.0f - chance, inverse_slots);
-    if (bb_rand(bb) >= p_slot) return;
+    if (bb_rand(bb) >= chance) return;
 
-    int options = 1;
-    if (bb->stretch_length_range >= 0.25f) options = 2;
-    if (bb->stretch_length_range >= 0.50f) options = 3;
-    if (bb->stretch_length_range >= 1.0f) options = 4;
-    bb->stretch_span = spans[bb_random_u32(bb) % (uint32_t)options];
+    bb->stretch_length = bb_pick_range(bb,
+        bb_map_range(bb->stretch_length_min, 2, 16),
+        bb_map_range(bb->stretch_length_max, 2, 16));
+    bb->stretch_span = bb_pick_range(bb,
+        bb_map_range(bb->stretch_slice_min, 1, 8),
+        bb_map_range(bb->stretch_slice_max, 1, 8));
     bb->stretch_remaining = bb->stretch_span - 1;
 
-    int max_semitones = (int)(bb->stretch_pitch_range * 12.0f + 0.5f);
-    if (max_semitones > 0) {
-        int semitones = (int)(bb_random_u32(bb) %
-            (uint32_t)(max_semitones * 2 + 1)) - max_semitones;
-        bb->stretch_pitch_ratio = powf(2.0f, (float)semitones / 12.0f);
-    }
+    int semitones = bb_pick_range(bb,
+        bb_map_range(bb->stretch_pitch_min, -12, 12),
+        bb_map_range(bb->stretch_pitch_max, -12, 12));
+    bb->stretch_pitch_semitones = semitones;
+    bb->stretch_pitch_ratio = powf(2.0f, (float)semitones / 12.0f);
 }
 
 static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
@@ -1963,7 +1984,7 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
     bb->sub_slice_counter = 0;
     bb_roll_stretch(bb);
 
-    if (bb->stretch_span > 1) {
+    if (bb->stretch_length > 1) {
         /* A held slice takes whole grid slots; retrigger subdivisions would
          * fight its duration and grain cursor. */
         bb->sub_slice_active = 0;
@@ -2142,6 +2163,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
             bb->playing = 1;
             bb->sub_slice_active = 0;
             bb->stretch_span = 1;
+            bb->stretch_length = 1;
             bb->stretch_remaining = 0;
             bb->stretch_pitch_ratio = 1.0f;
             bb->manual_slice_active = running;
@@ -2168,9 +2190,9 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     float slice_len = (bb->current_slice < 8)
                     ? (float)bb->slice_lengths[bb->current_slice] : 0.0f;
     float rate = (slice_len > 0.0f && spt > 0.0f)
-               ? slice_len / (spt * (float)bb->stretch_span) : 1.0f;
-    int grain_enabled = bb->pitch_lock || bb->grain_fx > 0 || bb->stretch_span > 1;
-    int grain_pitch_lock = bb->pitch_lock || bb->stretch_span > 1;
+               ? slice_len / (spt * (float)bb->stretch_length) : 1.0f;
+    int grain_enabled = bb->pitch_lock || bb->grain_fx > 0 || bb->stretch_length > 1;
+    int grain_pitch_lock = bb->pitch_lock || bb->stretch_length > 1;
     int cycle_frames = bb->grain_cycle_ms * MOVE_SAMPLE_RATE / 1000;
     
     for (int i = 0; i < frames; i++) {

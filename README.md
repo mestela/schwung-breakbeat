@@ -25,9 +25,11 @@ This uses midi out to get timing from the Move side of things. I tried (and fail
 | Knob | Range | What it does |
 |---|---|---|
 | **Complexity** | 0–100 | Probability that any given trigger picks a *random* slice instead of advancing in order. At 0, slices follow beat position (or Anchor if engaged). At 100, every non-stay trigger rolls a fresh random slice. |
-| **Anchor** | 0–100 | Locks slice index to *beat position* in the bar. At 0, behavior is sequential advance with Complexity-driven random swaps. At 100, beats 1 and 3 (kick/snare) are protected from swaps and the no-swap fallback snaps to `beat_position`. |
-| **Roll** | 0–100 | Temporal stickiness. At 0, every trigger is independent. At 100, most triggers either repeat the current slice, walk to the ±1 neighbor, or take a 5% escape-hatch jump. Produces the rolling jungle "1 2 3 1 2 3 4 5" feel and held-slice stutters. |
-| **Fill** | 0–100 | Intensity of the *fill bar* modulation. Only meaningful when **Phrase** is non-Off. Modulates Complexity ↑, Roll ↓, Anchor ↓ on the last bar of every phrase. At 100, the fill bar throws out the groove rules entirely. |
+
+Main also shows the current sample, slice, and playback mode. For example,
+`A 4 ST` means A slice 4 is stretched. Custom Preset and Save Preset controls
+have been removed from the page; Schwung saves the parameters with the Set.
+
 Main also contains the sample and phrase settings:
 
 | Setting | Values | What it does |
@@ -39,7 +41,13 @@ Main also contains the sample and phrase settings:
 | **B Chance** | 0–100 | Probability of swapping to B Loop on the last bar of a phrase. |
 | **Phrase** | enum | Multi-bar phrase length (Off, 2, 4, 8, 16 bars). |
 
-Preset, Save Preset, and Status also live on Main.
+### Anchors page
+
+| Knob | Range | What it does |
+|---|---|---|
+| **Anchor** | 0–100 | Locks slice index to *beat position* in the bar. At 0, behavior is sequential advance with Complexity-driven random swaps. At 100, beats 1 and 3 (kick/snare) are protected from swaps and the no-swap fallback snaps to `beat_position`. |
+| **Roll** | 0–100 | Temporal stickiness. At 0, every trigger is independent. At 100, most triggers either repeat the current slice, walk to the ±1 neighbor, or take a 5% escape-hatch jump. Produces the rolling jungle "1 2 3 1 2 3 4 5" feel and held-slice stutters. |
+| **Fill** | 0–100 | Intensity of the *fill bar* modulation. Only meaningful when **Phrase** is non-Off. Modulates Complexity ↑, Roll ↓, Anchor ↓ on the last bar of every phrase. At 100, the fill bar throws out the groove rules entirely. |
 
 ### Retrig page
 
@@ -57,15 +65,22 @@ is chosen at random.
 
 | Control | Range | What it does |
 |---|---|---|
-| **Chance** | 0–100 | How often an eligible automatic slice is stretched. 0 disables random stretching; 100 stretches every eligible slice. |
-| **Ln Rng** | 0–100 | Limits the possible hold length. 0 allows only 2 slots; 50 allows 2, 3, or 4; only 100 also allows 8. |
-| **Pch Rng** | 0–100 | Sets the maximum random pitch shift for a stretched slice, from none to ±12 semitones. A pitch is chosen once for each stretch. |
+| **Chance** | 0–100 | Probability that each automatic slice is stretched. 0 disables random stretching; 100 stretches every eligible slice. |
+| **Ln Min / Ln Max** | 0–100 | Lowest and highest stretch multipliers. 0 maps to 2× and 100 maps to 16×; every integer multiplier in between is available. |
+| **Sl Min / Sl Max** | 0–100 | Lowest and highest grid durations. 0 maps to one slice and 100 maps to eight slices. |
+| **PtchMin / PtchMax** | 0–100 | Lowest and highest random pitch shifts. 0 maps to −12 semitones, 50 to zero, and 100 to +12 semitones. |
 | **Grn FX** | 0–100 | Adds short repeated grains for a coarse early-sampler texture. |
+
+### Stretch FX page
+
+| Control | Range | What it does |
+|---|---|---|
 | **GrnCyc** | 10–120 ms | Length of each grain. Shorter cycles sound more buzzy; longer cycles make repeats clearer. |
 | **PiLck** | Off / On | Keeps normal slices near their original pitch as tempo changes. A randomly stretched slice always uses pitch-preserving grains and the chosen pitch shift. |
 
-Stretched slices remain on the original grid. Automatic selection resumes after
-the chosen number of slots. A played or programmed pad takes over at its next
+Stretched slices remain on the original grid. The stretch multiplier controls
+the audio rate, while the slice range controls how long it plays. Automatic
+selection resumes after the chosen number of slots. A played or programmed pad takes over at its next
 slice boundary; an A/B phrase change takes over at the bar boundary. Random
 stretching and retrigger subdivision are mutually exclusive for each slice.
 
@@ -80,11 +95,11 @@ Each pad slice plays at its own loop's A or B length, even when the automatic
 pattern uses the other loop's grid. Notes recorded on later steps can each
 select their own slice.
 
-## Dynamic Presets & Custom Samples
+## Saved Settings & Custom Samples
 
-Presets are no longer hardcoded in C. They are stored as `.json` files in the `presets/` directory. The module scans this directory on startup and when saving a new preset.
-
-To add custom presets, place a JSON file in the `presets/` folder on the device and restart or save a preset to rescan.
+Schwung saves Breakbeat's parameters with the Set. Older `.json` files in the
+module's `presets/` directory can still be loaded for compatibility, but the
+module's Preset and Save Preset controls are no longer shown.
 
 Custom samples can be loaded via the file browser for **A Sample** and **B Sample**. The browser opens in `/data/UserData/breakbeat-samples`, with symlinks to built-in samples and your User Library.
 
@@ -180,8 +195,8 @@ ssh-keygen -R move.local
 ### Unreleased
 - **Tighter live-pad timing.** A pad note received after a slice has started sounding waits for the next clocked slice boundary.
 - **Independent stretch controls.** Pitch Lock preserves pitch across tempo changes; Grain FX adds repeated-grain texture, with a separate Grain Cycle length. All default off except the cycle length, so existing presets keep their sound.
-- **Random whole-slice stretching.** A dedicated Stretch page sets separate odds for holding an automatic slice across 2, 3, 4, or 8 slice slots. Pads and phrase changes can interrupt the hold on the grid.
-- **Simpler stretch range.** Main, Retrig, and Stretch are named pages. Stretch now uses Chance, Ln Rng, and Pch Rng; Ln Rng defaults to 2-slot holds and unlocks longer holds only when raised. Preset appears on Main only.
+- **Independent random stretch ranges.** Stretch can choose any integer multiplier from 2× to 16× and occupy one to eight grid slices, with separate pitch endpoints from −12 to +12 semitones. Pads and phrase changes still interrupt on the grid.
+- **Clearer pages and status.** Main includes the status readout, Anchors holds Anchor/Roll/Fill, and the eight Stretch knobs show full names when touched. Schwung's Set saving replaces the module's custom Preset controls.
 
 ### v0.4.20
 - **Two banks of playable slices.** Pads 1–8 play A and pads 9–16 play B, including audition while stopped and notes programmed in a clip.

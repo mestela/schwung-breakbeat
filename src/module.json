@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.24",
+  "version": "0.4.25",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -20,14 +20,6 @@
         "root": {
           "label": "Main",
           "params": [
-            {
-              "key": "preset",
-              "label": "Preset",
-              "type": "int",
-              "min": 0,
-              "max": 10,
-              "default": 0
-            },
             {
               "key": "A_sample_path",
               "label": "A Sample",
@@ -81,14 +73,6 @@
               "default": 0
             },
             {
-              "level": "retrig",
-              "label": "Retrig"
-            },
-            {
-              "level": "stretch",
-              "label": "Stretch"
-            },
-            {
               "key": "complexity",
               "label": "Complexity",
               "type": "int",
@@ -109,6 +93,43 @@
               ],
               "default": 0
             },
+            {
+              "key": "status",
+              "label": "Status",
+              "type": "enum",
+              "options": [
+                "-"
+              ],
+              "default": 0
+            },
+            {
+              "level": "anchors",
+              "label": "Anchors"
+            },
+            {
+              "level": "retrig",
+              "label": "Retrig"
+            },
+            {
+              "level": "stretch",
+              "label": "Stretch"
+            }
+          ],
+          "knobs": [
+            "A_sample_path",
+            "A_sample_length",
+            "B_sample_path",
+            "B_sample_length",
+            "B_chance",
+            "complexity",
+            "phrase",
+            "status"
+          ],
+          "name": "Main"
+        },
+        "anchors": {
+          "name": "Anchors",
+          "params": [
             {
               "key": "anchor",
               "label": "Anchor",
@@ -132,41 +153,13 @@
               "min": 0,
               "max": 100,
               "default": 0
-            },
-            {
-              "key": "save_preset",
-              "label": "Save Preset",
-              "type": "int",
-              "min": 0,
-              "max": 1,
-              "default": 0
-            },
-            {
-              "key": "status",
-              "label": "Status",
-              "type": "enum",
-              "options": [
-                "-"
-              ],
-              "default": 0
             }
           ],
           "knobs": [
-            "preset",
-            "A_sample_path",
-            "A_sample_length",
-            "B_sample_path",
-            "B_sample_length",
-            "B_chance",
-            "complexity",
-            "phrase",
             "anchor",
             "roll",
-            "fill",
-            "save_preset",
-            "status"
-          ],
-          "name": "Main"
+            "fill"
+          ]
         },
         "retrig": {
           "name": "Retrig",
@@ -217,38 +210,98 @@
             {
               "key": "stretch_chance",
               "label": "Chance",
+              "name": "Chance",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0
             },
             {
-              "key": "stretch_length_range",
-              "label": "Ln Rng",
+              "key": "stretch_length_min",
+              "label": "Ln Min",
+              "name": "Length Minimum",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0
             },
             {
-              "key": "stretch_pitch_range",
-              "label": "Pch Rng",
+              "key": "stretch_length_max",
+              "label": "Ln Max",
+              "name": "Length Maximum",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0
+            },
+            {
+              "key": "stretch_slice_min",
+              "label": "Sl Min",
+              "name": "Slice Minimum",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "stretch_slice_max",
+              "label": "Sl Max",
+              "name": "Slice Maximum",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "stretch_pitch_min",
+              "label": "PtchMin",
+              "name": "Pitch Minimum",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 50
+            },
+            {
+              "key": "stretch_pitch_max",
+              "label": "PtchMax",
+              "name": "Pitch Maximum",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 50
             },
             {
               "key": "grain_fx",
               "label": "Grn FX",
+              "name": "Grain FX",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0
             },
             {
+              "level": "stretch_fx",
+              "label": "Stretch FX"
+            }
+          ],
+          "knobs": [
+            "stretch_chance",
+            "stretch_length_min",
+            "stretch_length_max",
+            "stretch_slice_min",
+            "stretch_slice_max",
+            "stretch_pitch_min",
+            "stretch_pitch_max",
+            "grain_fx"
+          ]
+        },
+        "stretch_fx": {
+          "name": "Stretch FX",
+          "params": [
+            {
               "key": "grain_cycle_ms",
               "label": "GrnCyc",
+              "name": "Grain Cycle",
               "type": "int",
               "min": 10,
               "max": 120,
@@ -257,6 +310,7 @@
             {
               "key": "pitch_lock",
               "label": "PiLck",
+              "name": "Pitch Lock",
               "type": "enum",
               "options": [
                 "Off",
@@ -266,10 +320,6 @@
             }
           ],
           "knobs": [
-            "stretch_chance",
-            "stretch_length_range",
-            "stretch_pitch_range",
-            "grain_fx",
             "grain_cycle_ms",
             "pitch_lock"
           ]
