@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -22,15 +22,16 @@
           "params": [
             {
               "key": "A_sample_path",
-              "label": "A Sample",
+              "label": "Sample A",
               "type": "filepath",
               "root": "/data/UserData/breakbeat-samples",
               "filter": ".wav",
-              "default": "/data/UserData/breakbeat-samples/Built-in/amen.wav"
+              "default": "/data/UserData/breakbeat-samples/Built-in/amen.wav",
+              "short_name": "A Sample"
             },
             {
               "key": "A_sample_length",
-              "label": "A Length",
+              "label": "Sample A Length",
               "type": "enum",
               "options": [
                 "1/4 bar",
@@ -40,19 +41,21 @@
                 "4 bars",
                 "8 bars"
               ],
-              "default": 2
+              "default": 2,
+              "short_name": "A Length"
             },
             {
               "key": "B_sample_path",
-              "label": "B Sample",
+              "label": "Sample B",
               "type": "filepath",
               "root": "/data/UserData/breakbeat-samples",
               "filter": ".wav",
-              "default": "/data/UserData/breakbeat-samples/Built-in/amen09.wav"
+              "default": "/data/UserData/breakbeat-samples/Built-in/amen09.wav",
+              "short_name": "B Sample"
             },
             {
               "key": "B_sample_length",
-              "label": "B Length",
+              "label": "Sample B Length",
               "type": "enum",
               "options": [
                 "1/4 bar",
@@ -62,15 +65,17 @@
                 "4 bars",
                 "8 bars"
               ],
-              "default": 2
+              "default": 2,
+              "short_name": "B Length"
             },
             {
               "key": "B_chance",
-              "label": "B Chance",
+              "label": "Sample B Chance",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "B Chance"
             },
             {
               "key": "complexity",
@@ -82,7 +87,7 @@
             },
             {
               "key": "phrase",
-              "label": "Phrase",
+              "label": "Phrase Length",
               "type": "enum",
               "options": [
                 "Off",
@@ -91,16 +96,18 @@
                 "8 bars",
                 "16 bars"
               ],
-              "default": 0
+              "default": 0,
+              "short_name": "Phrase"
             },
             {
               "key": "status",
-              "label": "Status",
+              "label": "Playback Status",
               "type": "enum",
               "options": [
                 "-"
               ],
-              "default": 0
+              "default": 0,
+              "short_name": "Status"
             },
             {
               "level": "anchors",
@@ -132,27 +139,30 @@
           "params": [
             {
               "key": "anchor",
-              "label": "Anchor",
+              "label": "Anchor Strength",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Anchor"
             },
             {
               "key": "roll",
-              "label": "Roll",
+              "label": "Roll Amount",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Roll"
             },
             {
               "key": "fill",
-              "label": "Fill",
+              "label": "Fill Amount",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Fill"
             }
           ],
           "knobs": [
@@ -166,35 +176,39 @@
           "params": [
             {
               "key": "retrig_2x",
-              "label": "Retrig 2x",
+              "label": "Retrigger 2x",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Retrig 2x"
             },
             {
               "key": "retrig_3x",
-              "label": "Retrig 3x",
+              "label": "Retrigger 3x",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Retrig 3x"
             },
             {
               "key": "retrig_4x",
-              "label": "Retrig 4x",
+              "label": "Retrigger 4x",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Retrig 4x"
             },
             {
               "key": "retrig_8x",
-              "label": "Retrig 8x",
+              "label": "Retrigger 8x",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Retrig 8x"
             }
           ],
           "knobs": [
@@ -209,75 +223,75 @@
           "params": [
             {
               "key": "stretch_chance",
-              "label": "Chance",
-              "name": "Chance",
+              "label": "Stretch Chance",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Chance"
             },
             {
               "key": "stretch_length_min",
-              "label": "Ln Min",
-              "name": "Length Minimum",
+              "label": "Length Minimum",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Ln Min"
             },
             {
               "key": "stretch_length_max",
-              "label": "Ln Max",
-              "name": "Length Maximum",
+              "label": "Length Maximum",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Ln Max"
             },
             {
               "key": "stretch_slice_min",
-              "label": "Sl Min",
-              "name": "Slice Minimum",
+              "label": "Slice Minimum",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Sl Min"
             },
             {
               "key": "stretch_slice_max",
-              "label": "Sl Max",
-              "name": "Slice Maximum",
+              "label": "Slice Maximum",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Sl Max"
             },
             {
               "key": "stretch_pitch_min",
-              "label": "PtchMin",
-              "name": "Pitch Minimum",
+              "label": "Pitch Minimum",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 50
+              "default": 50,
+              "short_name": "PtchMin"
             },
             {
               "key": "stretch_pitch_max",
-              "label": "PtchMax",
-              "name": "Pitch Maximum",
+              "label": "Pitch Maximum",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 50
+              "default": 50,
+              "short_name": "PtchMax"
             },
             {
               "key": "grain_fx",
-              "label": "Grn FX",
-              "name": "Grain FX",
+              "label": "Grain Effect",
               "type": "int",
               "min": 0,
               "max": 100,
-              "default": 0
+              "default": 0,
+              "short_name": "Grn FX"
             },
             {
               "level": "stretch_fx",
@@ -300,23 +314,23 @@
           "params": [
             {
               "key": "grain_cycle_ms",
-              "label": "GrnCyc",
-              "name": "Grain Cycle",
+              "label": "Grain Cycle",
               "type": "int",
               "min": 10,
               "max": 120,
-              "default": 40
+              "default": 40,
+              "short_name": "GrnCyc"
             },
             {
               "key": "pitch_lock",
-              "label": "PiLck",
-              "name": "Pitch Lock",
+              "label": "Pitch Lock",
               "type": "enum",
               "options": [
                 "Off",
                 "On"
               ],
-              "default": 0
+              "default": 0,
+              "short_name": "PiLck"
             }
           ],
           "knobs": [

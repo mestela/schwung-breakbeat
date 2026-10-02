@@ -264,10 +264,16 @@ int main(int argc, char **argv) {
           "Main shows status and Anchors has its own named page without custom presets");
     char chain_params[8192];
     api->get_param(instance, "chain_params", chain_params, sizeof(chain_params));
-    CHECK(strstr(chain_params, "\"key\":\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Length Minimum\"") &&
+    CHECK(strstr(hierarchy, "\"key\":\"stretch_length_min\",\"label\":\"Length Minimum\"") &&
+          strstr(hierarchy, "\"short_name\":\"Ln Min\"") &&
+          strstr(hierarchy, "\"key\":\"stretch_pitch_max\",\"label\":\"Pitch Maximum\"") &&
+          strstr(hierarchy, "\"short_name\":\"PtchMax\"") &&
+          strstr(hierarchy, "\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\"") &&
+          strstr(hierarchy, "\"short_name\":\"GrnCyc\"") &&
+          strstr(chain_params, "\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"") &&
           strstr(chain_params, "\"name\":\"Pitch Maximum\"") &&
           strstr(chain_params, "\"name\":\"Grain Cycle\""),
-          "stretch controls publish readable names for touch feedback");
+          "stretch controls retain short cell names and publish full header names");
     api->set_param(instance, "state", saved);
     char stretch_value[16];
     api->get_param(instance, "grain_cycle_ms", stretch_value, sizeof(stretch_value));

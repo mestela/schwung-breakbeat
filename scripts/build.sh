@@ -105,10 +105,18 @@ _VER=$(grep '"version"' src/module.json | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/
 _MINOR=$(echo "$_VER" | cut -d. -f2)
 _PATCH=$(echo "$_VER" | cut -d. -f3)
 _ABBREV="BBv${_MINOR}.${_PATCH}"
-# Inject version into both abbrev (slot label) and name (module menu header)
+# Inject version into both abbrev (slot label) and name (module menu header).
+# Strip formatting whitespace from the packaged copy: Schwung's standalone
+# module loader rejects manifests larger than 8192 bytes.
 sed -e "s/\"abbrev\": \"BB\"/\"abbrev\": \"${_ABBREV}\"/" \
     -e "s/\"name\": \"Breakbeat\"/\"name\": \"Breakbeat v${_MINOR}.${_PATCH}\"/" \
-    src/module.json > "$DIST_DIR/module.json"
+    -e 's/^[[:space:]]*//' \
+    src/module.json | tr -d '\n' > "$DIST_DIR/module.json"
+printf '\n' >> "$DIST_DIR/module.json"
+if [ "$(wc -c < "$DIST_DIR/module.json")" -gt 8192 ]; then
+    echo "ERROR: packaged module.json exceeds Schwung's 8192-byte limit" >&2
+    exit 1
+fi
 echo "  name/abbrev set to: Breakbeat v${_MINOR}.${_PATCH} / ${_ABBREV}"
 
 cat src/ui.js > "$DIST_DIR/ui.js"
