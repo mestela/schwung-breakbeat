@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
           "a pad auditions its slice with transport stopped");
     char pad_status[32];
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
-    CHECK(strncmp(pad_status, "A 2 ", 4) == 0,
+    CHECK(strncmp(pad_status, "A2", 2) == 0,
           "stopped pad selects the corresponding slice");
     api->set_param(instance, "A_vol", "0");
     api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_EXTERNAL);
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
     api->on_midi(instance, pad_b_slice_zero, 3, MOVE_MIDI_SOURCE_EXTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
-    CHECK(strncmp(pad_status, "B 0 ", 4) == 0 &&
+    CHECK(strncmp(pad_status, "B0", 2) == 0 &&
           !buffer_is_silent(audio, MOVE_FRAMES_PER_BLOCK * 2),
           "ninth pad auditions B slice zero while stopped");
     int16_t b_pad_audio[MOVE_FRAMES_PER_BLOCK * 2];
@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
     api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_EXTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
-    CHECK(strncmp(pad_status, "A 2 ", 4) == 0,
+    CHECK(strncmp(pad_status, "A2", 2) == 0,
           "state restore after a B pad keeps A available");
 
     /* Set metadata can arrive after the instance is created. A later pad
@@ -215,13 +215,13 @@ int main(int argc, char **argv) {
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     send_clock_ticks(api, instance, 3, audio);
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
-    CHECK(strncmp(pad_status, "B 0 ", 4) == 0,
+    CHECK(strncmp(pad_status, "B0", 2) == 0,
           "B pad lands on the A grid despite different loop lengths");
     CHECK(buffers_equal(b_pad_audio, audio, MOVE_FRAMES_PER_BLOCK * 2),
           "B pad plays at B's own speed during A playback");
     send_clock_ticks(api, instance, 24, audio);
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
-    CHECK(strncmp(pad_status, "A 2 ", 4) == 0,
+    CHECK(strncmp(pad_status, "A2", 2) == 0,
           "two-bar A grid resumes after a one-bar B pad slice");
     api->on_midi(instance, &trial_stop, 1, MOVE_MIDI_SOURCE_HOST);
 
@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
     CHECK(pad_status[0] == 'A', "16th note waits for the next six-clock boundary");
     send_clock_ticks(api, instance, 1, audio);
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
-    CHECK(strncmp(pad_status, "B 0 ", 4) == 0,
+    CHECK(strncmp(pad_status, "B0", 2) == 0,
           "16th note triggers between automatic eighth-note slices");
     send_clock_ticks(api, instance, 18, audio);
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
@@ -359,7 +359,7 @@ int main(int argc, char **argv) {
 
     char status[32];
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 0 ", 4) == 0,
+    CHECK(strncmp(status, "A0", 2) == 0,
           "MIDI Start begins A on slice zero");
 
     /* A note arriving after the downbeat block has rendered must wait for
@@ -368,15 +368,15 @@ int main(int argc, char **argv) {
     api->on_midi(instance, recorded_slice_three, 3, MOVE_MIDI_SOURCE_INTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 0 ", 4) == 0,
+    CHECK(strncmp(status, "A0", 2) == 0,
           "late note cannot retrigger off the grid");
     send_clock_ticks(api, instance, 12, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 3 ", 4) == 0,
+    CHECK(strncmp(status, "A3", 2) == 0,
           "late note lands on the next slice boundary");
     send_clock_ticks(api, instance, 12, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 2 ", 4) == 0,
+    CHECK(strncmp(status, "A2", 2) == 0,
           "automatic slicing resumes one boundary after the note");
 
     send_clock_ticks(api, instance, 9, audio);
@@ -384,15 +384,15 @@ int main(int argc, char **argv) {
     api->on_midi(instance, early_pad_slice_six, 3, MOVE_MIDI_SOURCE_INTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 2 ", 4) == 0,
+    CHECK(strncmp(status, "A2", 2) == 0,
           "early pad waits while the current slice finishes");
     send_clock_ticks(api, instance, 3, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 6 ", 4) == 0,
+    CHECK(strncmp(status, "A6", 2) == 0,
           "early pad lands exactly on the next slice boundary");
     send_clock_ticks(api, instance, 12, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 4 ", 4) == 0,
+    CHECK(strncmp(status, "A4", 2) == 0,
           "automatic break resumes one full slice after quantized pad");
 
     send_clock_ticks(api, instance, 9, audio);
@@ -400,15 +400,15 @@ int main(int argc, char **argv) {
     api->on_midi(instance, early_b_pad_slice_two, 3, MOVE_MIDI_SOURCE_INTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 4 ", 4) == 0,
+    CHECK(strncmp(status, "A4", 2) == 0,
           "early B pad waits for the next slice boundary");
     send_clock_ticks(api, instance, 3, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "B 2 ", 4) == 0,
+    CHECK(strncmp(status, "B2", 2) == 0,
           "pad eleven plays B slice two on the next boundary");
     send_clock_ticks(api, instance, 12, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 6 ", 4) == 0,
+    CHECK(strncmp(status, "A6", 2) == 0,
           "A break resumes after one full B pad slice");
 
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
@@ -416,7 +416,7 @@ int main(int argc, char **argv) {
     api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 3 ", 4) == 0,
+    CHECK(strncmp(status, "A3", 2) == 0,
           "note on the first downbeat survives transport reset");
 
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
@@ -424,7 +424,7 @@ int main(int argc, char **argv) {
     api->on_midi(instance, recorded_slice_three, 3, MOVE_MIDI_SOURCE_INTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 3 ", 4) == 0,
+    CHECK(strncmp(status, "A3", 2) == 0,
           "note after first clock still claims the unrendered downbeat");
 
     api->on_midi(instance, &stop, 1, MOVE_MIDI_SOURCE_HOST);
@@ -433,7 +433,7 @@ int main(int argc, char **argv) {
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     send_clock_ticks(api, instance, 12, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 1 ", 4) == 0,
+    CHECK(strncmp(status, "A1", 2) == 0,
           "next Play without notes resumes automatic slicing");
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
     api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
     api->set_param(instance, "A_sample_length", "1"); /* 1/2 bar */
     send_clock_ticks(api, instance, 6, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 1 ", 4) == 0,
+    CHECK(strncmp(status, "A1", 2) == 0,
           "live A length change takes effect at the next new trigger interval");
     api->set_param(instance, "A_sample_length", "2"); /* restore 1 bar */
     api->on_midi(instance, &start, 1, MOVE_MIDI_SOURCE_HOST);
@@ -482,17 +482,17 @@ int main(int argc, char **argv) {
 
     send_clock_ticks(api, instance, 12, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 1 ", 4) == 0,
+    CHECK(strncmp(status, "A1", 2) == 0,
           "twelfth MIDI clock advances to A slice one");
 
     send_clock_ticks(api, instance, 84, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 0 ", 4) == 0,
+    CHECK(strncmp(status, "A0", 2) == 0,
           "first beat of bar two returns to A slice zero");
 
     send_clock_ticks(api, instance, 96, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 0 ", 4) == 0,
+    CHECK(strncmp(status, "A0", 2) == 0,
           "first beat of bar three remains A slice zero");
 
     send_clock_ticks(api, instance, 95, audio);
@@ -501,24 +501,24 @@ int main(int argc, char **argv) {
 
     send_clock_ticks(api, instance, 1, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "B 0 ", 4) == 0,
+    CHECK(strncmp(status, "B0", 2) == 0,
           "B begins on bar four regardless of its two-bar source length");
 
     api->set_param(instance, "quant", "1"); /* finer note grid, auto grid unchanged */
     api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_INTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "B 0 ", 4) == 0,
+    CHECK(strncmp(status, "B0", 2) == 0,
           "A pad waits for the next boundary during a B fill");
 
     api->set_param(instance, "B_sample_length", "1"); /* 1/2 bar */
     send_clock_ticks(api, instance, 6, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 2 ", 4) == 0,
+    CHECK(strncmp(status, "A2", 2) == 0,
           "A pad interrupts B on its next clocked slice");
     send_clock_ticks(api, instance, 6, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "B 2 ", 4) == 0,
+    CHECK(strncmp(status, "B2", 2) == 0,
           "B fill resumes after the manual A slice");
     api->set_param(instance, "quant", "0");
     api->set_param(instance, "B_sample_length", "3"); /* restore 2 bars */
@@ -529,7 +529,7 @@ int main(int argc, char **argv) {
 
     send_clock_ticks(api, instance, 1, audio);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 0 ", 4) == 0,
+    CHECK(strncmp(status, "A0", 2) == 0,
           "A returns on the next four-bar phrase boundary");
 
     /* A Stop during B must not make the next song run begin on B. */
@@ -547,7 +547,7 @@ int main(int argc, char **argv) {
     api->on_midi(instance, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(instance, "status", status, sizeof(status));
-    CHECK(strncmp(status, "A 0 ", 4) == 0,
+    CHECK(strncmp(status, "A0", 2) == 0,
           "restarting after a B fill always begins with A slice zero");
 
     api->on_midi(instance, &stop, 1, MOVE_MIDI_SOURCE_HOST);
@@ -628,8 +628,12 @@ int main(int argc, char **argv) {
     api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 0 1X") == 0,
+    CHECK(strcmp(status, "A0") == 0,
           "zero stretch chance leaves the automatic break alone");
+    char status_info[32];
+    api->get_param(reference, "status_info", status_info, sizeof(status_info));
+    CHECK(strcmp(status_info, "A0,0,0,0") == 0,
+          "fullscreen detail leaves effect values blank during normal playback");
 
     api->set_param(reference, "retrig_2x", "100");
     api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
@@ -637,7 +641,7 @@ int main(int argc, char **argv) {
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     send_clock_ticks(api, reference, 12, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 1 2R") == 0,
+    CHECK(strcmp(status, "A1R2") == 0,
           "status identifies a two-way retrigger");
     api->set_param(reference, "retrig_2x", "0");
     api->set_param(reference, "retrig_3x", "100");
@@ -646,8 +650,11 @@ int main(int argc, char **argv) {
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     send_clock_ticks(api, reference, 12, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 1 3R") == 0,
+    CHECK(strcmp(status, "A1R3") == 0,
           "status reports the selected retrigger multiplier");
+    api->get_param(reference, "status_info", status_info, sizeof(status_info));
+    CHECK(strcmp(status_info, "A1R3,0,0,0") == 0,
+          "fullscreen detail reports retrigger without stale stretch values");
     api->set_param(reference, "retrig_3x", "0");
 
     api->set_param(reference, "stretch_chance", "100");
@@ -661,15 +668,18 @@ int main(int argc, char **argv) {
     api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 0 2S") == 0,
-          "stretch status identifies sample, slice, and effect");
+    CHECK(strcmp(status, "A0S1") == 0,
+          "compact stretch status reports held slice count");
+    api->get_param(reference, "status_info", status_info, sizeof(status_info));
+    CHECK(strcmp(status_info, "A0S1,2,1,0") == 0,
+          "fullscreen detail separates stretch length, slice count, and pitch");
     char stretch_info[32];
     api->get_param(reference, "stretch_info", stretch_info, sizeof(stretch_info));
     CHECK(strcmp(stretch_info, "L2 S1 P0") == 0,
           "minimum controls select 2x for one slice at original pitch");
     send_clock_ticks(api, reference, 12, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 1 2S") == 0,
+    CHECK(strcmp(status, "A1S1") == 0,
           "one-slice stretch returns control at the next boundary");
 
     api->set_param(reference, "stretch_length_min", "7");
@@ -678,7 +688,7 @@ int main(int argc, char **argv) {
     api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 0 3S") == 0,
+    CHECK(strcmp(status, "A0S1") == 0,
           "status reports the chosen three-way stretch multiplier");
 
     api->set_param(reference, "stretch_length_min", "21");
@@ -691,13 +701,16 @@ int main(int argc, char **argv) {
     api->get_param(reference, "stretch_info", stretch_info, sizeof(stretch_info));
     CHECK(strcmp(stretch_info, "L5 S4 P0") == 0,
           "arbitrary 5x length and four-slice hold are independent");
+    api->get_param(reference, "status_info", status_info, sizeof(status_info));
+    CHECK(strcmp(status_info, "A0S4,5,4,0") == 0,
+          "compact status uses four slices while fullscreen retains five-times length");
     send_clock_ticks(api, reference, 36, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 0 5S") == 0,
+    CHECK(strcmp(status, "A0S4") == 0,
           "four-slice stretch holds through three later boundaries");
     send_clock_ticks(api, reference, 12, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 4 5S") == 0,
+    CHECK(strcmp(status, "A4S4") == 0,
           "automatic slicing resumes after the four-slice hold");
 
     api->set_param(reference, "stretch_length_min", "0");
@@ -737,16 +750,19 @@ int main(int argc, char **argv) {
     api->get_param(reference, "stretch_info", stretch_info, sizeof(stretch_info));
     CHECK(strcmp(stretch_info, "L16 S8 P-12") == 0,
           "maximum and minimum endpoints map to 16x, eight slices, and -12 semitones");
+    api->get_param(reference, "status_info", status_info, sizeof(status_info));
+    CHECK(strcmp(status_info, "A0S8,16,8,-12") == 0,
+          "fullscreen detail reports maximum length, span, and negative pitch");
     send_clock_ticks(api, reference, 9, expected_audio);
     const uint8_t interrupt_pad[3] = {0x90, 41, 100};
     api->on_midi(reference, interrupt_pad, 3, MOVE_MIDI_SOURCE_INTERNAL);
     send_clock_ticks(api, reference, 3, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 5 1X") == 0,
+    CHECK(strcmp(status, "A5") == 0,
           "pad note replaces a long stretch on the next grid boundary");
     send_clock_ticks(api, reference, 12, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "A 2 16S") == 0,
+    CHECK(strcmp(status, "A2S8") == 0,
           "automatic stretch resumes after the manual pad's slice");
 
     api->set_param(reference, "A_sample_length", "3"); /* 2 bars */
@@ -757,7 +773,7 @@ int main(int argc, char **argv) {
     api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     send_clock_ticks(api, reference, 96, expected_audio);
     api->get_param(reference, "status", status, sizeof(status));
-    CHECK(strcmp(status, "B 0 16S") == 0,
+    CHECK(strcmp(status, "B0S8") == 0,
           "B phrase boundary interrupts an eight-slice A stretch");
     api->set_param(reference, "state",
                    "{\"stretch_2x\":0,\"stretch_3x\":0,"

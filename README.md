@@ -26,12 +26,13 @@ This uses midi out to get timing from the Move side of things. I tried (and fail
 |---|---|---|
 | **Complexity** | 0–100 | Probability that any given trigger picks a *random* slice instead of advancing in order. At 0, slices follow beat position (or Anchor if engaged). At 100, every non-stay trigger rolls a fresh random slice. |
 
-Main also shows the current sample, slice, and playback mode. Press Status to
+Main also shows the current sample, slice, and playback mode. `A2` means A
+slice 2 is playing normally, `A2R4` means it is retriggering four times, and
+`B3S2` means B slice 3 is stretched across two slice slots. Press Status to
 open a fullscreen view of both sample waveforms and their eight slice zones;
-the active zone highlights and the right side shows retrigger or stretch.
-For example,
-`A 3 1X` means A slice 3 is playing normally, `A 3 2R` means it is retriggering
-twice, and `B 2 3S` means B slice 2 is stretched 3×. Custom Preset and Save Preset controls
+the active zone highlights. The right side always labels retrigger, stretch
+length, stretch slice count, and stretch pitch, with values only for the active
+effect. Custom Preset and Save Preset controls
 have been removed from the page; Schwung saves the parameters with the Set.
 
 Main also contains the sample and phrase settings:
@@ -197,6 +198,10 @@ ssh-keygen -R move.local
 ```
 
 ## Changelog
+
+### Unreleased
+- **Compact status.** Main uses `A2R4` and `B3S2` codes that fit Schwung's standard canvas cell. Stretch status reports occupied slices.
+- **Detailed fullscreen status.** The waveform view keeps fixed retrigger, stretch length, slice count, and pitch labels with values only while that effect plays.
 
 ### v0.4.29
 - **Master and note grid.** Master adds A/B volume balance, grain controls, and 8ths/16ths timing for pads and recorded notes. Automatic slice timing is unchanged.

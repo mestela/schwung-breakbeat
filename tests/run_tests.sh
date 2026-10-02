@@ -45,3 +45,5 @@ cc -Wall -Wextra -O0 -g -std=c11 -rdynamic \
     "$REPO_ROOT/build/tests/dsp.so" \
     "$REPO_ROOT/samples/amen01.wav" \
     "$REPO_ROOT/samples/sesame.wav"
+
+node tests/test_status_view.js

@@ -311,11 +311,13 @@ static int bb_clamp_percent(int value);
 static void bb_update_status(breakbeat_t *bb) {
     unsigned kind = bb->stretch_length > 1 ? 2u
                   : (bb->sub_slice_active ? 1u : 0u);
-    unsigned factor = kind == 2u ? (unsigned)bb->stretch_length
+    unsigned factor = kind == 2u ? (unsigned)bb->stretch_span
                     : (kind == 1u ? (unsigned)bb->retrigger_divisions : 1u);
     unsigned word = ((factor & 31u) << 6) | (kind << 4)
                   | ((unsigned)(bb->current_slice & 7) << 1)
-                  | (bb->current_loop == 'B' ? 1u : 0u);
+                  | (bb->current_loop == 'B' ? 1u : 0u)
+                  | ((kind == 2u ? (unsigned)bb->stretch_length : 0u) << 11)
+                  | ((kind == 2u ? (unsigned)(bb->stretch_pitch_semitones + 12) : 0u) << 16);
     atomic_store_explicit(&bb->status_word, word, memory_order_relaxed);
 }
 
@@ -453,62 +455,63 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "gth\"},{\"key\":\"B_chance\",\"label\":\"Sample B Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\"},{\"ke"
         "y\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Cmplx\"},{\"key\":\"phrase\",\"lab"
         "el\":\"Phrase Length\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\""
-        "},{\"key\":\"status\",\"label\":\"Playback Status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"display\":\"readout\",\"canvas_"
-        "script\":\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status\","
-        "\"wave_a\",\"wave_b\"]},{\"level\":\"anchors\",\"label\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretc"
-        "h\",\"label\":\"Stretch\"},{\"key\":\"wave_a\",\"label\":\"Waveform A\",\"type\":\"string\",\"access\":\"read\",\"live\":true},{\"key\""
-        ":\"wave_b\",\"label\":\"Waveform B\",\"type\":\"string\",\"access\":\"read\",\"live\":true},{\"level\":\"master\",\"label\":\"Master\""
-        "}]},\"anchors\":{\"name\":\"Anchors\",\"knobs\":[\"anchor\",\"roll\",\"fill\"],\"params\":[{\"key\":\"anchor\",\"label\":\"Anchor Str"
-        "ength\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\"},{\"key\":\"roll\",\"label\":\"Roll Amount\",\"type\":\"int\","
-        "\"min\":0,\"max\":100,\"short_name\":\"Roll\"},{\"key\":\"fill\",\"label\":\"Fill Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
-        "rt_name\":\"Fill\"}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\"],\"params"
-        "\":[{\"key\":\"retrig_2x\",\"label\":\"Retrigger 2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\""
-        "retrig_3x\",\"label\":\"Retrigger 3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\","
-        "\"label\":\"Retrigger 4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Re"
-        "trigger 8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\"}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"s"
-        "tretch_chance\",\"stretch_length_min\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitc"
-        "h_min\",\"stretch_pitch_max\"],\"params\":[{\"key\":\"stretch_chance\",\"label\":\"Stretch Chance\",\"type\":\"int\",\"min\":0,\"m"
-        "ax\":100,\"short_name\":\"Chance\"},{\"key\":\"stretch_length_min\",\"label\":\"Length Minimum\",\"type\":\"int\",\"min\":0,\"max\""
-        ":100,\"short_name\":\"Ln Min\"},{\"key\":\"stretch_length_max\",\"label\":\"Length Maximum\",\"type\":\"int\",\"min\":0,\"max\":10"
-        "0,\"short_name\":\"Ln Max\"},{\"key\":\"stretch_slice_min\",\"label\":\"Slice Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"sh"
-        "ort_name\":\"Sl Min\"},{\"key\":\"stretch_slice_max\",\"label\":\"Slice Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_n"
-        "ame\":\"Sl Max\"},{\"key\":\"stretch_pitch_min\",\"label\":\"Pitch Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":"
-        "\"PtchMin\"},{\"key\":\"stretch_pitch_max\",\"label\":\"Pitch Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ptc"
-        "hMax\"}]},\"master\":{\"name\":\"Master\",\"knobs\":[\"grain_fx\",\"grain_cycle_ms\",\"A_vol\",\"B_vol\",\"quant\"],\"params\":[{\"k"
-        "ey\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\"},{\"key\":\"grai"
-        "n_fx\",\"label\":\"Grain Effect\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\"},{\"key\":\"A_vol\",\"label\":\"Sam"
-        "ple A Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\"},{\"key\":\"B_vol\",\"label\":\"Sample B Volume\",\"t"
-        "ype\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\"},{\"key\":\"quant\",\"label\":\"Note Quantization\",\"type\":\"enum\",\"o"
-        "ptions\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\"}]}},\"params\":[{\"key\":\"A_sample_path\",\"type\":\"filepath\",\"root\":\"/"
-        "data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"A Sample\",\"name\":\"Sample A\"},{\"key\":\"A_sample_l"
-        "ength\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"A Length"
-        "\",\"name\":\"Sample A Length\"},{\"key\":\"B_sample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\""
-        ",\"filter\":\".wav\",\"short_name\":\"B Sample\",\"name\":\"Sample B\"},{\"key\":\"B_sample_length\",\"type\":\"enum\",\"options\":["
-        "\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"B Length\",\"name\":\"Sample B Length\"},{\"ke"
-        "y\":\"B_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\",\"name\":\"Sample B Chance\"},{\"key\":\"complex"
-        "ity\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Cmplx\",\"name\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"o"
-        "ptions\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"sta"
-        "tus\",\"type\":\"canvas\",\"short_name\":\"Status\",\"display\":\"readout\",\"canvas_script\":\"status_view.js\",\"show_value\":t"
-        "rue,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status\",\"wave_a\",\"wave_b\"],\"name\":\"Playback Sta"
-        "tus\"},{\"key\":\"wave_a\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform A\"},{\"key\":\"wave_b\",\"type\":"
-        "\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform B\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
-        "t_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"n"
-        "ame\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"k"
-        "ey\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_"
-        "3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\""
-        "int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0"
-        ",\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":"
-        "100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,"
-        "\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
-        "rt_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_na"
-        "me\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"S"
-        "l Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin"
-        "\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"na"
-        "me\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Gra"
-        "in Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key"
-        "\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":"
-        "\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":"
-        "[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantization\"}]}");
+        "},{\"key\":\"status\",\"label\":\"Playback Status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":\"status_view"
+        ".js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wave_a\",\"wave_"
+        "b\"]},{\"level\":\"anchors\",\"label\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretch\",\"label\":\"Str"
+        "etch\"},{\"key\":\"status_info\",\"label\":\"Playback Detail\",\"type\":\"string\",\"access\":\"read\",\"live\":true},{\"key\":\"wav"
+        "e_a\",\"label\":\"Waveform A\",\"type\":\"string\",\"access\":\"read\",\"live\":true},{\"key\":\"wave_b\",\"label\":\"Waveform B\",\"t"
+        "ype\":\"string\",\"access\":\"read\",\"live\":true},{\"level\":\"master\",\"label\":\"Master\"}]},\"anchors\":{\"name\":\"Anchors\",\""
+        "knobs\":[\"anchor\",\"roll\",\"fill\"],\"params\":[{\"key\":\"anchor\",\"label\":\"Anchor Strength\",\"type\":\"int\",\"min\":0,\"max\""
+        ":100,\"short_name\":\"Anchor\"},{\"key\":\"roll\",\"label\":\"Roll Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R"
+        "oll\"},{\"key\":\"fill\",\"label\":\"Fill Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\"}]},\"retrig\":{\"nam"
+        "e\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Re"
+        "trigger 2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"label\":\"Retrigger 3x\""
+        ",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"label\":\"Retrigger 4x\",\"type\":\"in"
+        "t\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Retrigger 8x\",\"type\":\"int\",\"min\":0,"
+        "\"max\":100,\"short_name\":\"Retrig 8x\"}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_length_mi"
+        "n\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_max\"],\"para"
+        "ms\":[{\"key\":\"stretch_chance\",\"label\":\"Stretch Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\"},{\""
+        "key\":\"stretch_length_min\",\"label\":\"Length Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\"},{\"key"
+        "\":\"stretch_length_max\",\"label\":\"Length Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"key\":\""
+        "stretch_slice_min\",\"label\":\"Slice Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\"stret"
+        "ch_slice_max\",\"label\":\"Slice Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stretch_pi"
+        "tch_min\",\"label\":\"Pitch Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_pitch_"
+        "max\",\"label\":\"Pitch Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"}]},\"master\":{\"name\":\"Master"
+        "\",\"knobs\":[\"grain_fx\",\"grain_cycle_ms\",\"A_vol\",\"B_vol\",\"quant\"],\"params\":[{\"key\":\"grain_cycle_ms\",\"label\":\"Gra"
+        "in Cycle\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\"},{\"key\":\"grain_fx\",\"label\":\"Grain Effect\",\"typ"
+        "e\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\"},{\"key\":\"A_vol\",\"label\":\"Sample A Volume\",\"type\":\"int\",\"min\":"
+        "0,\"max\":100,\"short_name\":\"A Vol\"},{\"key\":\"B_vol\",\"label\":\"Sample B Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
+        "rt_name\":\"B Vol\"},{\"key\":\"quant\",\"label\":\"Note Quantization\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_n"
+        "ame\":\"Quant\"}]}},\"params\":[{\"key\":\"A_sample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\","
+        "\"filter\":\".wav\",\"short_name\":\"A Sample\",\"name\":\"Sample A\"},{\"key\":\"A_sample_length\",\"type\":\"enum\",\"options\":[\""
+        "1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"A Length\",\"name\":\"Sample A Length\"},{\"key"
+        "\":\"B_sample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"B "
+        "Sample\",\"name\":\"Sample B\"},{\"key\":\"B_sample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 ba"
+        "rs\",\"4 bars\",\"8 bars\"],\"short_name\":\"B Length\",\"name\":\"Sample B Length\"},{\"key\":\"B_chance\",\"type\":\"int\",\"min\":"
+        "0,\"max\":100,\"short_name\":\"B Chance\",\"name\":\"Sample B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":1"
+        "00,\"short_name\":\"Cmplx\",\"name\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\","
+        "\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\""
+        ":\"Status\",\"canvas_script\":\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extr"
+        "a_keys\":[\"status_info\",\"wave_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"status_info\",\"type\":\"string\",\"acce"
+        "ss\":\"read\",\"live\":true,\"name\":\"Playback Detail\"},{\"key\":\"wave_a\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\""
+        "name\":\"Waveform A\"},{\"key\":\"wave_b\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform B\"},{\"key\":\"a"
+        "nchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"in"
+        "t\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"s"
+        "hort_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig"
+        " 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":"
+        "\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4"
+        "x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\""
+        "stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_"
+        "length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_leng"
+        "th_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice_mi"
+        "n\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\",\"ty"
+        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\":\"i"
+        "nt\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int\",\""
+        "min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":10,"
+        "\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_"
+        "name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\",\"name"
+        "\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample B Volum"
+        "e\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantization\"}]}");
 }
 
 static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
@@ -522,28 +525,28 @@ static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
         "ort_name\":\"B Length\",\"name\":\"Sample B Length\"},{\"key\":\"B_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\""
         "B Chance\",\"name\":\"Sample B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Cmplx\",\"n"
         "ame\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short"
-        "_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"display\":\"reado"
-        "ut\",\"canvas_script\":\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys"
-        "\":[\"status\",\"wave_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"wave_a\",\"type\":\"string\",\"access\":\"read\",\"live"
-        "\":true,\"name\":\"Waveform A\"},{\"key\":\"wave_b\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform B\"},{"
-        "\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"t"
-        "ype\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max"
-        "\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\""
-        ":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\""
-        ",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Ret"
-        "rigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},"
-        "{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\""
-        "stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stre"
-        "tch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_"
-        "slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_"
-        "max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\""
-        "type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\""
-        ":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\""
-        "min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100"
-        ",\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vo"
-        "l\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample"
-        " B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantiza"
-        "tion\"}]");
+        "_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":"
+        "\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wa"
+        "ve_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"status_info\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"na"
+        "me\":\"Playback Detail\"},{\"key\":\"wave_a\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform A\"},{\"key\""
+        ":\"wave_b\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform B\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":"
+        "0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
+        "t_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\""
+        "Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\""
+        "},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"re"
+        "trig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"ty"
+        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"stretch_chance\",\"type\":\"in"
+        "t\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\""
+        "min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\""
+        ":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"m"
+        "ax\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":10"
+        "0,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
+        "rt_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_na"
+        "me\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"Gr"
+        "nCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Gra"
+        "in Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\",\"name\":\"Sample A Volume\"},{\"key"
+        "\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample B Volume\"},{\"key\":\"quant\",\"type\":"
+        "\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantization\"}]");
 }
 
 /* Create the filepath browser "portal" with symlinks to bundled samples and
@@ -1212,7 +1215,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->pending_loop = 'A';
     bb->standby_loop = 'B';
     bb->pending_sample_switch = 0;
-    atomic_init(&bb->status_word, 1u << 6); /* A 0 1X */
+    atomic_init(&bb->status_word, 1u << 6); /* A0 */
     bb->sample_counter = 0;
     bb->trigger_phase = 0.0f;
     bb->bar_phase = 0.0f;
@@ -1902,9 +1905,27 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
         unsigned kind = (word >> 4) & 3u;
         unsigned factor = (word >> 6) & 31u;
-        char suffix = kind == 2u ? 'S' : (kind == 1u ? 'R' : 'X');
-        return snprintf(buf, buf_len, "%c %u %u%c", (word & 1u) ? 'B' : 'A',
-                        (word >> 1) & 7u, factor, suffix);
+        if (kind == 0u)
+            return snprintf(buf, buf_len, "%c%u", (word & 1u) ? 'B' : 'A',
+                            (word >> 1) & 7u);
+        return snprintf(buf, buf_len, "%c%u%c%u", (word & 1u) ? 'B' : 'A',
+                        (word >> 1) & 7u, kind == 2u ? 'S' : 'R', factor);
+    }
+    else if (strcmp(key, "status_info") == 0) {
+        unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
+        unsigned kind = (word >> 4) & 3u;
+        unsigned factor = (word >> 6) & 31u;
+        char compact[8];
+        if (kind == 0u)
+            snprintf(compact, sizeof(compact), "%c%u", (word & 1u) ? 'B' : 'A',
+                     (word >> 1) & 7u);
+        else
+            snprintf(compact, sizeof(compact), "%c%u%c%u", (word & 1u) ? 'B' : 'A',
+                     (word >> 1) & 7u, kind == 2u ? 'S' : 'R', factor);
+        return snprintf(buf, buf_len, "%s,%u,%u,%d", compact,
+                        kind == 2u ? (word >> 11) & 31u : 0u,
+                        kind == 2u ? factor : 0u,
+                        kind == 2u ? (int)((word >> 16) & 31u) - 12 : 0);
     }
     else if (strcmp(key, "wave_a") == 0 || strcmp(key, "wave_b") == 0) {
         char wanted = key[5] == 'b' ? 'B' : 'A';

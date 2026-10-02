@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.29",
+  "version": "0.4.30",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -105,13 +105,12 @@
               "label": "Playback Status",
               "type": "canvas",
               "short_name": "Status",
-              "display": "readout",
               "canvas_script": "status_view.js",
               "show_value": true,
               "show_footer": false,
               "fullscreen_live_ms": 50,
               "extra_keys": [
-                "status",
+                "status_info",
                 "wave_a",
                 "wave_b"
               ]
@@ -127,6 +126,13 @@
             {
               "level": "stretch",
               "label": "Stretch"
+            },
+            {
+              "key": "status_info",
+              "label": "Playback Detail",
+              "type": "string",
+              "access": "read",
+              "live": true
             },
             {
               "key": "wave_a",
