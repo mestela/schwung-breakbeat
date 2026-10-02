@@ -27,7 +27,8 @@ This uses midi out to get timing from the Move side of things. I tried (and fail
 | **Complexity** | 0–100 | Probability that any given trigger picks a *random* slice instead of advancing in order. At 0, slices follow beat position (or Anchor if engaged). At 100, every non-stay trigger rolls a fresh random slice. |
 
 Main also shows the current sample, slice, and playback mode. For example,
-`A 4 ST` means A slice 4 is stretched. Custom Preset and Save Preset controls
+`A 3 1X` means A slice 3 is playing normally, `A 3 2R` means it is retriggering
+twice, and `B 2 3S` means B slice 2 is stretched 3×. Custom Preset and Save Preset controls
 have been removed from the page; Schwung saves the parameters with the Set.
 
 Main also contains the sample and phrase settings:
@@ -193,6 +194,7 @@ ssh-keygen -R move.local
 ## Changelog
 
 ### Unreleased
+- **Complete status readings.** Status now shows the sample, slice, and effect multiplier (`1X`, `2R`, `3S`) as one consistent readout.
 - **Tighter live-pad timing.** A pad note received after a slice has started sounding waits for the next clocked slice boundary.
 - **Independent stretch controls.** Pitch Lock preserves pitch across tempo changes; Grain FX adds repeated-grain texture, with a separate Grain Cycle length. All default off except the cycle length, so existing presets keep their sound.
 - **Independent random stretch ranges.** Stretch can choose any integer multiplier from 2× to 16× and occupy one to eight grid slices, with separate pitch endpoints from −12 to +12 semitones. Pads and phrase changes still interrupt on the grid.

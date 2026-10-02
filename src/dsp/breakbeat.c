@@ -157,7 +157,7 @@ typedef struct {
     char current_loop;   /* loop actually playing right now ('A' or 'B') */
     char auto_loop;      /* loop chosen by the automatic phrase pattern */
     char pending_loop;   /* loop that will play when pending_sample_path loads */
-    char status_str[32];
+    atomic_uint status_word;   /* complete status snapshot for the UI thread */
 
     uint32_t rng_state;  /* per-instance xorshift PRNG; never takes libc rand() locks */
 
@@ -280,13 +280,14 @@ static float bb_rand(void *ctx) {
 static int bb_clamp_percent(int value);
 
 static void bb_update_status(breakbeat_t *bb) {
-    int div = bb->sub_slice_active ? bb->retrigger_divisions : 1;
-    if (bb->stretch_length > 1)
-        snprintf(bb->status_str, sizeof(bb->status_str), "%c %d ST",
-                 bb->current_loop, bb->current_slice & 7);
-    else
-        snprintf(bb->status_str, sizeof(bb->status_str), "%c %d %dx",
-                 bb->current_loop, bb->current_slice & 7, div);
+    unsigned kind = bb->stretch_length > 1 ? 2u
+                  : (bb->sub_slice_active ? 1u : 0u);
+    unsigned factor = kind == 2u ? (unsigned)bb->stretch_length
+                    : (kind == 1u ? (unsigned)bb->retrigger_divisions : 1u);
+    unsigned word = ((factor & 31u) << 6) | (kind << 4)
+                  | ((unsigned)(bb->current_slice & 7) << 1)
+                  | (bb->current_loop == 'B' ? 1u : 0u);
+    atomic_store_explicit(&bb->status_word, word, memory_order_relaxed);
 }
 
 /* JSON helpers for state parsing */
@@ -423,30 +424,31 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "\":\"Sample B Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\"},{\"key\":\"complexity\",\"lab"
         "el\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},{\"key\":\"phrase\",\"label\":\"Phrase Length\",\"type\":\"enu"
         "m\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\"},{\"key\":\"status\",\"la"
-        "bel\":\"Playback Status\",\"type\":\"enum\",\"options\":[\"-\"],\"short_name\":\"Status\"},{\"level\":\"anchors\",\"labe"
-        "l\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretch\",\"label\":\"Stretch\"}]},\"anchors\":"
-        "{\"name\":\"Anchors\",\"knobs\":[\"anchor\",\"roll\",\"fill\"],\"params\":[{\"key\":\"anchor\",\"label\":\"Anchor Strengt"
-        "h\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\"},{\"key\":\"roll\",\"label\":\"Roll Amount\",\"type\":"
-        "\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\"},{\"key\":\"fill\",\"label\":\"Fill Amount\",\"type\":\"int\",\"min\":"
-        "0,\"max\":100,\"short_name\":\"Fill\"}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"retrig_3x\",\"retri"
-        "g_4x\",\"retrig_8x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Retrigger 2x\",\"type\":\"int\",\"min\":0,\"max\":10"
-        "0,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"label\":\"Retrigger 3x\",\"type\":\"int\",\"min\":0,\"max\":100"
-        ",\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"label\":\"Retrigger 4x\",\"type\":\"int\",\"min\":0,\"max\":100,"
-        "\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Retrigger 8x\",\"type\":\"int\",\"min\":0,\"max\":100,\""
-        "short_name\":\"Retrig 8x\"}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_length_min"
-        "\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_ma"
-        "x\",\"grain_fx\"],\"params\":[{\"key\":\"stretch_chance\",\"label\":\"Stretch Chance\",\"type\":\"int\",\"min\":0,\"max\""
-        ":100,\"short_name\":\"Chance\"},{\"key\":\"stretch_length_min\",\"label\":\"Length Minimum\",\"type\":\"int\",\"min\":"
-        "0,\"max\":100,\"short_name\":\"Ln Min\"},{\"key\":\"stretch_length_max\",\"label\":\"Length Maximum\",\"type\":\"int\""
-        ",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"key\":\"stretch_slice_min\",\"label\":\"Slice Minimum\",\"type\":"
-        "\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\"stretch_slice_max\",\"label\":\"Slice Maximum\",\"t"
-        "ype\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stretch_pitch_min\",\"label\":\"Pitch Minimu"
-        "m\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_pitch_max\",\"label\":\"Pitch "
-        "Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"},{\"key\":\"grain_fx\",\"label\":\"Grain Eff"
-        "ect\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\"},{\"level\":\"stretch_fx\",\"label\":\"Stretch FX"
-        "\"}]},\"stretch_fx\":{\"name\":\"Stretch FX\",\"knobs\":[\"grain_cycle_ms\",\"pitch_lock\"],\"params\":[{\"key\":\"gra"
-        "in_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\"},{\"key\":\"pi"
-        "tch_lock\",\"label\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"],\"short_name\":\"PiLck\"}]}}}");
+        "bel\":\"Playback Status\",\"type\":\"enum\",\"options\":[\"-\"],\"short_name\":\"Status\",\"access\":\"read\"},{\"level\""
+        ":\"anchors\",\"label\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretch\",\"label\":\"Stretc"
+        "h\"}]},\"anchors\":{\"name\":\"Anchors\",\"knobs\":[\"anchor\",\"roll\",\"fill\"],\"params\":[{\"key\":\"anchor\",\"label\""
+        ":\"Anchor Strength\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\"},{\"key\":\"roll\",\"label\":\"Roll"
+        " Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\"},{\"key\":\"fill\",\"label\":\"Fill Amount\",\"ty"
+        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\"}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"r"
+        "etrig_3x\",\"retrig_4x\",\"retrig_8x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Retrigger 2x\",\"type\":\"int\","
+        "\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"label\":\"Retrigger 3x\",\"type\":\"int\",\""
+        "min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"label\":\"Retrigger 4x\",\"type\":\"int\",\"m"
+        "in\":0,\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Retrigger 8x\",\"type\":\"int\",\"mi"
+        "n\":0,\"max\":100,\"short_name\":\"Retrig 8x\"}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"st"
+        "retch_length_min\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\""
+        "stretch_pitch_max\",\"grain_fx\"],\"params\":[{\"key\":\"stretch_chance\",\"label\":\"Stretch Chance\",\"type\":\"in"
+        "t\",\"min\":0,\"max\":100,\"short_name\":\"Chance\"},{\"key\":\"stretch_length_min\",\"label\":\"Length Minimum\",\"ty"
+        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\"},{\"key\":\"stretch_length_max\",\"label\":\"Length Maxim"
+        "um\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"key\":\"stretch_slice_min\",\"label\":\"Slice "
+        "Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\"stretch_slice_max\",\"label\":\"S"
+        "lice Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stretch_pitch_min\",\"labe"
+        "l\":\"Pitch Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_pitch_max\""
+        ",\"label\":\"Pitch Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"},{\"key\":\"grain_fx\",\"l"
+        "abel\":\"Grain Effect\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\"},{\"level\":\"stretch_fx\",\"la"
+        "bel\":\"Stretch FX\"}]},\"stretch_fx\":{\"name\":\"Stretch FX\",\"knobs\":[\"grain_cycle_ms\",\"pitch_lock\"],\"para"
+        "ms\":[{\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"Grn"
+        "Cyc\"},{\"key\":\"pitch_lock\",\"label\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"],\"short_name\":\"Pi"
+        "Lck\"}]}}}");
 }
 
 static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
@@ -461,24 +463,24 @@ static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
         "ey\":\"B_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\",\"name\":\"Sample B Chance\"},{\"ke"
         "y\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":100,\"name\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"o"
         "ptions\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\",\"name\":\"Phrase Length\"},{"
-        "\"key\":\"status\",\"type\":\"enum\",\"options\":[\"-\"],\"short_name\":\"Status\",\"name\":\"Playback Status\"},{\"key\":"
-        "\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll"
-        "\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int"
-        "\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":"
-        "0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,"
-        "\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"m"
-        "ax\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max"
-        "\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\""
-        "max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\"mi"
-        "n\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_length_max\",\"type\":\"in"
-        "t\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice_min\",\"type"
-        "\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\",\""
-        "type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_mi"
-        "n\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pit"
-        "ch_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_"
-        "fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"grain_cycle_"
-        "ms\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"pitch_lock\","
-        "\"type\":\"enum\",\"options\":[\"Off\",\"On\"],\"short_name\":\"PiLck\",\"name\":\"Pitch Lock\"}]");
+        "\"key\":\"status\",\"type\":\"enum\",\"options\":[\"-\"],\"short_name\":\"Status\",\"access\":\"read\",\"name\":\"Playback "
+        "Status\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strengt"
+        "h\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"f"
+        "ill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"ty"
+        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type"
+        "\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":"
+        "\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"i"
+        "nt\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"stretch_chance\",\"type\""
+        ":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_length_min\","
+        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_length"
+        "_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_"
+        "slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stre"
+        "tch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\""
+        "stretch_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"k"
+        "ey\":\"stretch_pitch_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\""
+        "},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"ke"
+        "y\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"ke"
+        "y\":\"pitch_lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"],\"short_name\":\"PiLck\",\"name\":\"Pitch Lock\"}]");
 }
 
 /* Create the filepath browser "portal" with symlinks to bundled samples and
@@ -1134,7 +1136,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     bb->pending_loop = 'A';
     bb->standby_loop = 'B';
     bb->pending_sample_switch = 0;
-    strcpy(bb->status_str, "A 0 1x");
+    atomic_init(&bb->status_word, 1u << 6); /* A 0 1X */
     bb->sample_counter = 0;
     bb->trigger_phase = 0.0f;
     bb->bar_phase = 0.0f;
@@ -1801,7 +1803,12 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len, "0");
     }
     else if (strcmp(key, "status") == 0) {
-        return snprintf(buf, buf_len, "%s", bb->status_str);
+        unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
+        unsigned kind = (word >> 4) & 3u;
+        unsigned factor = (word >> 6) & 31u;
+        char suffix = kind == 2u ? 'S' : (kind == 1u ? 'R' : 'X');
+        return snprintf(buf, buf_len, "%c %u %u%c", (word & 1u) ? 'B' : 'A',
+                        (word >> 1) & 7u, factor, suffix);
     }
     else if (strcmp(key, "stretch_info") == 0) {
         return snprintf(buf, buf_len, "L%d S%d P%d", bb->stretch_length,

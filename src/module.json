@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.26",
+  "version": "0.4.27",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -107,7 +107,8 @@
                 "-"
               ],
               "default": 0,
-              "short_name": "Status"
+              "short_name": "Status",
+              "access": "read"
             },
             {
               "level": "anchors",
