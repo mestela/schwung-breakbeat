@@ -62,9 +62,12 @@ Main also contains the sample and phrase settings:
 | **Retrig 3x** | 0–100 | Per-bar probability of a 3x stutter. |
 | **Retrig 4x** | 0–100 | Per-bar probability of a 4x stutter. |
 | **Retrig 8x** | 0–100 | Per-bar probability of an 8x (16th-note micro-stutter) on any given beat. |
+| **Retrig 16x** | 0–100 | Per-bar probability of a 16x micro-stutter. |
+| **Retrig 32x** | 0–100 | Per-bar probability of a 32x micro-stutter. |
 
-The four retrigger knobs are independent. If several win on one slice, one rate
-is chosen at random.
+The six retrigger knobs are independent. If several win on one slice, one rate
+is chosen at random. At 16x or 32x the compact Main status shows `A2R` to fit;
+the fullscreen view shows the exact rate.
 
 ### Stretch page
 
@@ -202,6 +205,8 @@ ssh-keygen -R move.local
 ### Unreleased
 - **Compact status.** Main uses `A2R4` and `B3S2` codes that fit Schwung's standard canvas cell. Stretch status reports occupied slices.
 - **Detailed fullscreen status.** The waveform view keeps fixed retrigger, stretch length, slice count, and pitch labels with values only while that effect plays.
+- **Cleaner pages.** Removed the accidental Main-2 page of waveform and detail data.
+- **Faster retriggers.** Added independent 16x and 32x retrigger probabilities.
 
 ### v0.4.29
 - **Master and note grid.** Master adds A/B volume balance, grain controls, and 8ths/16ths timing for pads and recorded notes. Automatic slice timing is unchanged.

@@ -26,6 +26,7 @@
 
 #define BB_PATH_MAX 512
 #define BB_WAVE_BINS 64
+#define BB_RETRIG_COUNT 6
 
 typedef struct {
     int fd;
@@ -77,7 +78,7 @@ typedef struct {
     uint32_t slice_lengths[8];
     char waveform[BB_WAVE_BINS + 1];
     int current_slice;
-    float retrig_p[4];        /* [0]=2x [1]=3x [2]=4x [3]=8x, each 0..1 */
+    float retrig_p[BB_RETRIG_COUNT]; /* 2x, 3x, 4x, 8x, 16x, 32x; each 0..1 */
     float stretch_chance;     /* per-slice chance of grain stretching */
     int stretch_length_min, stretch_length_max; /* UI 0..100 maps to 2x..16x */
     int stretch_slice_min, stretch_slice_max;   /* UI 0..100 maps to 1..8 slots */
@@ -313,11 +314,11 @@ static void bb_update_status(breakbeat_t *bb) {
                   : (bb->sub_slice_active ? 1u : 0u);
     unsigned factor = kind == 2u ? (unsigned)bb->stretch_span
                     : (kind == 1u ? (unsigned)bb->retrigger_divisions : 1u);
-    unsigned word = ((factor & 31u) << 6) | (kind << 4)
+    unsigned word = ((factor & 63u) << 6) | (kind << 4)
                   | ((unsigned)(bb->current_slice & 7) << 1)
                   | (bb->current_loop == 'B' ? 1u : 0u)
-                  | ((kind == 2u ? (unsigned)bb->stretch_length : 0u) << 11)
-                  | ((kind == 2u ? (unsigned)(bb->stretch_pitch_semitones + 12) : 0u) << 16);
+                  | ((kind == 2u ? (unsigned)bb->stretch_length : 0u) << 12)
+                  | ((kind == 2u ? (unsigned)(bb->stretch_pitch_semitones + 12) : 0u) << 17);
     atomic_store_explicit(&bb->status_word, word, memory_order_relaxed);
 }
 
@@ -458,60 +459,60 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "},{\"key\":\"status\",\"label\":\"Playback Status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":\"status_view"
         ".js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wave_a\",\"wave_"
         "b\"]},{\"level\":\"anchors\",\"label\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretch\",\"label\":\"Str"
-        "etch\"},{\"key\":\"status_info\",\"label\":\"Playback Detail\",\"type\":\"string\",\"access\":\"read\",\"live\":true},{\"key\":\"wav"
-        "e_a\",\"label\":\"Waveform A\",\"type\":\"string\",\"access\":\"read\",\"live\":true},{\"key\":\"wave_b\",\"label\":\"Waveform B\",\"t"
-        "ype\":\"string\",\"access\":\"read\",\"live\":true},{\"level\":\"master\",\"label\":\"Master\"}]},\"anchors\":{\"name\":\"Anchors\",\""
-        "knobs\":[\"anchor\",\"roll\",\"fill\"],\"params\":[{\"key\":\"anchor\",\"label\":\"Anchor Strength\",\"type\":\"int\",\"min\":0,\"max\""
-        ":100,\"short_name\":\"Anchor\"},{\"key\":\"roll\",\"label\":\"Roll Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R"
-        "oll\"},{\"key\":\"fill\",\"label\":\"Fill Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\"}]},\"retrig\":{\"nam"
-        "e\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Re"
-        "trigger 2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"label\":\"Retrigger 3x\""
-        ",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"label\":\"Retrigger 4x\",\"type\":\"in"
-        "t\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Retrigger 8x\",\"type\":\"int\",\"min\":0,"
-        "\"max\":100,\"short_name\":\"Retrig 8x\"}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_length_mi"
-        "n\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_max\"],\"para"
-        "ms\":[{\"key\":\"stretch_chance\",\"label\":\"Stretch Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\"},{\""
-        "key\":\"stretch_length_min\",\"label\":\"Length Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\"},{\"key"
-        "\":\"stretch_length_max\",\"label\":\"Length Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"key\":\""
-        "stretch_slice_min\",\"label\":\"Slice Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\"stret"
-        "ch_slice_max\",\"label\":\"Slice Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stretch_pi"
-        "tch_min\",\"label\":\"Pitch Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_pitch_"
-        "max\",\"label\":\"Pitch Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"}]},\"master\":{\"name\":\"Master"
-        "\",\"knobs\":[\"grain_fx\",\"grain_cycle_ms\",\"A_vol\",\"B_vol\",\"quant\"],\"params\":[{\"key\":\"grain_cycle_ms\",\"label\":\"Gra"
-        "in Cycle\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\"},{\"key\":\"grain_fx\",\"label\":\"Grain Effect\",\"typ"
-        "e\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\"},{\"key\":\"A_vol\",\"label\":\"Sample A Volume\",\"type\":\"int\",\"min\":"
-        "0,\"max\":100,\"short_name\":\"A Vol\"},{\"key\":\"B_vol\",\"label\":\"Sample B Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
-        "rt_name\":\"B Vol\"},{\"key\":\"quant\",\"label\":\"Note Quantization\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_n"
-        "ame\":\"Quant\"}]}},\"params\":[{\"key\":\"A_sample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\","
-        "\"filter\":\".wav\",\"short_name\":\"A Sample\",\"name\":\"Sample A\"},{\"key\":\"A_sample_length\",\"type\":\"enum\",\"options\":[\""
-        "1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"A Length\",\"name\":\"Sample A Length\"},{\"key"
-        "\":\"B_sample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"B "
-        "Sample\",\"name\":\"Sample B\"},{\"key\":\"B_sample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 ba"
-        "rs\",\"4 bars\",\"8 bars\"],\"short_name\":\"B Length\",\"name\":\"Sample B Length\"},{\"key\":\"B_chance\",\"type\":\"int\",\"min\":"
-        "0,\"max\":100,\"short_name\":\"B Chance\",\"name\":\"Sample B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":1"
-        "00,\"short_name\":\"Cmplx\",\"name\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\","
-        "\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\""
-        ":\"Status\",\"canvas_script\":\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extr"
-        "a_keys\":[\"status_info\",\"wave_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"status_info\",\"type\":\"string\",\"acce"
-        "ss\":\"read\",\"live\":true,\"name\":\"Playback Detail\"},{\"key\":\"wave_a\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\""
-        "name\":\"Waveform A\"},{\"key\":\"wave_b\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform B\"},{\"key\":\"a"
-        "nchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"in"
-        "t\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"s"
-        "hort_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig"
-        " 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":"
-        "\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4"
-        "x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\""
-        "stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_"
-        "length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_leng"
-        "th_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice_mi"
-        "n\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\",\"ty"
-        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\":\"i"
-        "nt\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int\",\""
-        "min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":10,"
-        "\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_"
-        "name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\",\"name"
-        "\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample B Volum"
-        "e\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantization\"}]}");
+        "etch\"},{\"level\":\"master\",\"label\":\"Master\"}]},\"anchors\":{\"name\":\"Anchors\",\"knobs\":[\"anchor\",\"roll\",\"fill\"],\"par"
+        "ams\":[{\"key\":\"anchor\",\"label\":\"Anchor Strength\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\"},{\"key\":\""
+        "roll\",\"label\":\"Roll Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\"},{\"key\":\"fill\",\"label\":\"Fill Am"
+        "ount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\"}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"re"
+        "trig_3x\",\"retrig_4x\",\"retrig_8x\",\"retrig_16x\",\"retrig_32x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Retrigger 2x"
+        "\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"label\":\"Retrigger 3x\",\"type\":\"i"
+        "nt\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"label\":\"Retrigger 4x\",\"type\":\"int\",\"min\":0"
+        ",\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Retrigger 8x\",\"type\":\"int\",\"min\":0,\"max\":100,"
+        "\"short_name\":\"Retrig 8x\"},{\"key\":\"retrig_16x\",\"label\":\"Retrigger 16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_na"
+        "me\":\"R16x\"},{\"key\":\"retrig_32x\",\"label\":\"Retrigger 32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\"}]},"
+        "\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_length_min\",\"stretch_length_max\",\"stretch_slice"
+        "_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_max\"],\"params\":[{\"key\":\"stretch_chance\",\"label\":\""
+        "Stretch Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\"},{\"key\":\"stretch_length_min\",\"label\":\"Len"
+        "gth Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\"},{\"key\":\"stretch_length_max\",\"label\":\"Length"
+        " Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"key\":\"stretch_slice_min\",\"label\":\"Slice Mini"
+        "mum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\"stretch_slice_max\",\"label\":\"Slice Maximum\","
+        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stretch_pitch_min\",\"label\":\"Pitch Minimum\",\"type"
+        "\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_pitch_max\",\"label\":\"Pitch Maximum\",\"type\":\"i"
+        "nt\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"}]},\"master\":{\"name\":\"Master\",\"knobs\":[\"grain_fx\",\"grain_cycle_ms\""
+        ",\"A_vol\",\"B_vol\",\"quant\"],\"params\":[{\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":"
+        "120,\"short_name\":\"GrnCyc\"},{\"key\":\"grain_fx\",\"label\":\"Grain Effect\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name"
+        "\":\"Grn FX\"},{\"key\":\"A_vol\",\"label\":\"Sample A Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\"},{\"ke"
+        "y\":\"B_vol\",\"label\":\"Sample B Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\"},{\"key\":\"quant\",\"labe"
+        "l\":\"Note Quantization\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\"}]}},\"params\":[{\"key\":\"A_s"
+        "ample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"A Sample"
+        "\",\"name\":\"Sample A\"},{\"key\":\"A_sample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4"
+        " bars\",\"8 bars\"],\"short_name\":\"A Length\",\"name\":\"Sample A Length\"},{\"key\":\"B_sample_path\",\"type\":\"filepath\",\"r"
+        "oot\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"B Sample\",\"name\":\"Sample B\"},{\"key\":\"B_s"
+        "ample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"B"
+        " Length\",\"name\":\"Sample B Length\"},{\"key\":\"B_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\",\"n"
+        "ame\":\"Sample B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Cmplx\",\"name\":\"Comple"
+        "xity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phra"
+        "se\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":\"status_view"
+        ".js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wave_a\",\"wave_"
+        "b\"],\"name\":\"Playback Status\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anc"
+        "hor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\""
+        "fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\""
+        ",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"ma"
+        "x\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
+        "t_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ret"
+        "rig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"retrig_16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R16x\",\"name\":\""
+        "Retrigger 16x\"},{\"key\":\"retrig_32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\",\"name\":\"Retrigger 32x\"}"
+        ",{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":"
+        "\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"str"
+        "etch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch"
+        "_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice"
+        "_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\","
+        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type"
+        "\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\","
+        "\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":10"
+        "0,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A V"
+        "ol\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sampl"
+        "e B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantiz"
+        "ation\"}]}");
 }
 
 static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
@@ -527,26 +528,26 @@ static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
         "ame\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short"
         "_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":"
         "\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wa"
-        "ve_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"status_info\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"na"
-        "me\":\"Playback Detail\"},{\"key\":\"wave_a\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform A\"},{\"key\""
-        ":\"wave_b\",\"type\":\"string\",\"access\":\"read\",\"live\":true,\"name\":\"Waveform B\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":"
-        "0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
-        "t_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\""
-        "Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\""
-        "},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"re"
-        "trig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"ty"
-        "pe\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"stretch_chance\",\"type\":\"in"
-        "t\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\""
-        "min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\""
-        ":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"m"
-        "ax\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":10"
-        "0,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
-        "rt_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_na"
-        "me\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"Gr"
-        "nCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Gra"
-        "in Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\",\"name\":\"Sample A Volume\"},{\"key"
-        "\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample B Volume\"},{\"key\":\"quant\",\"type\":"
-        "\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantization\"}]");
+        "ve_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\""
+        ",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amoun"
+        "t\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\","
+        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\""
+        ",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"ma"
+        "x\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
+        "t_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"retrig_16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R1"
+        "6x\",\"name\":\"Retrigger 16x\"},{\"key\":\"retrig_32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\",\"name\":\"Ret"
+        "rigger 32x\"},{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chan"
+        "ce\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"}"
+        ",{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"k"
+        "ey\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"s"
+        "tretch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch"
+        "_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitc"
+        "h_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\""
+        "type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min"
+        "\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
+        "t_name\":\"A Vol\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\""
+        "name\":\"Sample B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\""
+        "Note Quantization\"}]");
 }
 
 /* Create the filepath browser "portal" with symlinks to bundled samples and
@@ -1130,11 +1131,14 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
 
     /* Per-rate retrigger probabilities (new format). */
     {
+        for (int rate = 0; rate < BB_RETRIG_COUNT; rate++) bb->retrig_p[rate] = 0.0f;
         int has_new = 0;
         if (json_get_float(json, "retrig_2x", &fval)) { bb->retrig_p[0] = fval / 100.0f; has_new = 1; }
         if (json_get_float(json, "retrig_3x", &fval)) { bb->retrig_p[1] = fval / 100.0f; has_new = 1; }
         if (json_get_float(json, "retrig_4x", &fval)) { bb->retrig_p[2] = fval / 100.0f; has_new = 1; }
         if (json_get_float(json, "retrig_8x", &fval)) { bb->retrig_p[3] = fval / 100.0f; has_new = 1; }
+        if (json_get_float(json, "retrig_16x", &fval)) { bb->retrig_p[4] = fval / 100.0f; has_new = 1; }
+        if (json_get_float(json, "retrig_32x", &fval)) { bb->retrig_p[5] = fval / 100.0f; has_new = 1; }
         /* Backward-compat: old retrigger + retrigger_rate → new per-rate. */
         if (!has_new) {
             float prob = 0.0f;
@@ -1190,7 +1194,7 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
     if (!bb) return NULL;
 
     bb->preset_idx = 0;
-    bb->retrig_p[0] = bb->retrig_p[1] = bb->retrig_p[2] = bb->retrig_p[3] = 0.0f;
+    for (int i = 0; i < BB_RETRIG_COUNT; i++) bb->retrig_p[i] = 0.0f;
     bb->stretch_chance = 0.0f;
     bb->stretch_length_min = bb->stretch_length_max = 0;
     bb->stretch_slice_min = bb->stretch_slice_max = 0;
@@ -1631,6 +1635,12 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->retrig_p[3] < 0.0f) bb->retrig_p[3] = 0.0f;
         if (bb->retrig_p[3] > 1.0f) bb->retrig_p[3] = 1.0f;
     }
+    else if (strcmp(key, "retrig_16x") == 0 || strcmp(key, "retrig_32x") == 0) {
+        int index = strcmp(key, "retrig_16x") == 0 ? 4 : 5;
+        bb->retrig_p[index] = atof(val) / 100.0f;
+        if (bb->retrig_p[index] < 0.0f) bb->retrig_p[index] = 0.0f;
+        if (bb->retrig_p[index] > 1.0f) bb->retrig_p[index] = 1.0f;
+    }
     else if (strcmp(key, "B_chance") == 0) {
         bb->swap_prob = atof(val) / 100.0f;
         if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
@@ -1706,7 +1716,9 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
                 fprintf(f, "  \"retrig_2x\": %d,\n", (int)(bb->retrig_p[0] * 100.0f));
                 fprintf(f, "  \"retrig_3x\": %d,\n", (int)(bb->retrig_p[1] * 100.0f));
                 fprintf(f, "  \"retrig_4x\": %d,\n", (int)(bb->retrig_p[2] * 100.0f));
-                fprintf(f, "  \"retrig_8x\": %d\n",  (int)(bb->retrig_p[3] * 100.0f));
+                fprintf(f, "  \"retrig_8x\": %d,\n", (int)(bb->retrig_p[3] * 100.0f));
+                fprintf(f, "  \"retrig_16x\": %d,\n", (int)(bb->retrig_p[4] * 100.0f));
+                fprintf(f, "  \"retrig_32x\": %d\n",  (int)(bb->retrig_p[5] * 100.0f));
                 fprintf(f, "}\n");
                 fclose(f);
                 
@@ -1836,6 +1848,9 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (json_get_int(val, "retrig_3x", &i)) bb->retrig_p[1] = (float)i / 100.0f;
         if (json_get_int(val, "retrig_4x", &i)) bb->retrig_p[2] = (float)i / 100.0f;
         if (json_get_int(val, "retrig_8x", &i)) bb->retrig_p[3] = (float)i / 100.0f;
+        bb->retrig_p[4] = bb->retrig_p[5] = 0.0f; /* pre-0.4.31 Set state */
+        if (json_get_int(val, "retrig_16x", &i)) bb->retrig_p[4] = (float)i / 100.0f;
+        if (json_get_int(val, "retrig_32x", &i)) bb->retrig_p[5] = (float)i / 100.0f;
         if (json_get_int(val, "swap_prob", &i)) {
             bb->swap_prob = (float)i / 100.0f;
             if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
@@ -1904,9 +1919,14 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "status") == 0) {
         unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
         unsigned kind = (word >> 4) & 3u;
-        unsigned factor = (word >> 6) & 31u;
+        unsigned factor = (word >> 6) & 63u;
         if (kind == 0u)
             return snprintf(buf, buf_len, "%c%u", (word & 1u) ? 'B' : 'A',
+                            (word >> 1) & 7u);
+        /* Five characters exceed the stock canvas cell. The fullscreen
+         * readout still carries the exact 16x/32x retrigger rate. */
+        if (kind == 1u && factor >= 16u)
+            return snprintf(buf, buf_len, "%c%uR", (word & 1u) ? 'B' : 'A',
                             (word >> 1) & 7u);
         return snprintf(buf, buf_len, "%c%u%c%u", (word & 1u) ? 'B' : 'A',
                         (word >> 1) & 7u, kind == 2u ? 'S' : 'R', factor);
@@ -1914,7 +1934,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "status_info") == 0) {
         unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
         unsigned kind = (word >> 4) & 3u;
-        unsigned factor = (word >> 6) & 31u;
+        unsigned factor = (word >> 6) & 63u;
         char compact[8];
         if (kind == 0u)
             snprintf(compact, sizeof(compact), "%c%u", (word & 1u) ? 'B' : 'A',
@@ -1923,9 +1943,9 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             snprintf(compact, sizeof(compact), "%c%u%c%u", (word & 1u) ? 'B' : 'A',
                      (word >> 1) & 7u, kind == 2u ? 'S' : 'R', factor);
         return snprintf(buf, buf_len, "%s,%u,%u,%d", compact,
-                        kind == 2u ? (word >> 11) & 31u : 0u,
+                        kind == 2u ? (word >> 12) & 31u : 0u,
                         kind == 2u ? factor : 0u,
-                        kind == 2u ? (int)((word >> 16) & 31u) - 12 : 0);
+                        kind == 2u ? (int)((word >> 17) & 31u) - 12 : 0);
     }
     else if (strcmp(key, "wave_a") == 0 || strcmp(key, "wave_b") == 0) {
         char wanted = key[5] == 'b' ? 'B' : 'A';
@@ -2017,6 +2037,10 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "retrig_8x") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->retrig_p[3] * 100.0f));
     }
+    else if (strcmp(key, "retrig_16x") == 0 || strcmp(key, "retrig_32x") == 0) {
+        int index = strcmp(key, "retrig_16x") == 0 ? 4 : 5;
+        return snprintf(buf, buf_len, "%d", (int)(bb->retrig_p[index] * 100.0f));
+    }
     else if (strcmp(key, "B_chance") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->swap_prob * 100.0f));
     }
@@ -2055,7 +2079,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len,
             "{\"preset_index\":%d,\"sample_path\":\"%s\",\"alt_sample_path\":\"%s\","
             "\"length\":%d,\"alt_length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,"
-            "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"swap_prob\":%d,"
+            "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"retrig_16x\":%d,\"retrig_32x\":%d,\"swap_prob\":%d,"
             "\"pitch_lock\":%d,\"grain_fx\":%d,\"grain_cycle_ms\":%d,\"A_vol\":%d,\"B_vol\":%d,\"quant\":%d,"
             "\"stretch_chance\":%d,\"stretch_length_min\":%d,\"stretch_length_max\":%d,\"stretch_slice_min\":%d,\"stretch_slice_max\":%d,\"stretch_pitch_min\":%d,\"stretch_pitch_max\":%d}",
             bb->preset_idx,
@@ -2065,6 +2089,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             (int)(bb->roll * 100.0f), phrase_idx, (int)(bb->fill * 100.0f),
             (int)(bb->retrig_p[0] * 100.0f), (int)(bb->retrig_p[1] * 100.0f),
             (int)(bb->retrig_p[2] * 100.0f), (int)(bb->retrig_p[3] * 100.0f),
+            (int)(bb->retrig_p[4] * 100.0f), (int)(bb->retrig_p[5] * 100.0f),
             (int)(bb->swap_prob * 100.0f),
             bb->pitch_lock, bb->grain_fx, bb->grain_cycle_ms,
             (int)(bb->loop_gain[0] * 100.0f + 0.5f), (int)(bb->loop_gain[1] * 100.0f + 0.5f), bb->note_quant_ticks == 6,
@@ -2141,13 +2166,13 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
         return;
     }
 
-    static const int retrigger_divs[4] = {2, 3, 4, 8};
+    static const int retrigger_divs[BB_RETRIG_COUNT] = {2, 3, 4, 8, 16, 32};
     float triggers_per_bar = (bb->active_length > 0.0f)
                            ? (8.0f / bb->active_length) : 8.0f;
     float inv_triggers_per_bar = 1.0f / triggers_per_bar;
-    int fired[4];
+    int fired[BB_RETRIG_COUNT];
     int fired_count = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < BB_RETRIG_COUNT; i++) {
         float p_bar = bb->retrig_p[i];
         if (p_bar <= 0.0f) continue;
         float p_trigger = (p_bar >= 1.0f) ? 1.0f
@@ -2393,6 +2418,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
             uint32_t start = bb->slice_starts[bb->current_slice];
             uint32_t len = bb->slice_lengths[bb->current_slice];
             uint32_t part_len = len / bb->retrigger_divisions;
+            if (part_len == 0) part_len = 1;
             
             if (bb->play_pos >= start + part_len) {
                 if (bb->sub_slice_counter < bb->retrigger_divisions - 1) {

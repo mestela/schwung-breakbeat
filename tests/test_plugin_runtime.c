@@ -262,6 +262,8 @@ int main(int argc, char **argv) {
     api->set_param(instance, "stretch_slice_max", "43");
     api->set_param(instance, "stretch_pitch_min", "25");
     api->set_param(instance, "stretch_pitch_max", "75");
+    api->set_param(instance, "retrig_16x", "27");
+    api->set_param(instance, "retrig_32x", "38");
     saved_len = api->get_param(instance, "state", saved, sizeof(saved));
     CHECK(saved_len > 0 && strstr(saved, "\"pitch_lock\":1") &&
           strstr(saved, "\"grain_fx\":100") &&
@@ -272,8 +274,12 @@ int main(int argc, char **argv) {
           strstr(saved, "\"stretch_slice_min\":14") &&
           strstr(saved, "\"stretch_slice_max\":43") &&
           strstr(saved, "\"stretch_pitch_min\":25") &&
-          strstr(saved, "\"stretch_pitch_max\":75"),
+          strstr(saved, "\"stretch_pitch_max\":75") &&
+          strstr(saved, "\"retrig_16x\":27") &&
+          strstr(saved, "\"retrig_32x\":38"),
           "stretch controls are saved in song state");
+    api->set_param(instance, "retrig_16x", "0");
+    api->set_param(instance, "retrig_32x", "0");
     api->set_param(instance, "pitch_lock", "0");
     api->set_param(instance, "grain_fx", "0");
     api->set_param(instance, "grain_cycle_ms", "40");
@@ -292,6 +298,8 @@ int main(int argc, char **argv) {
           strstr(hierarchy, "\"level\":\"stretch\"") &&
           strstr(hierarchy, "\"stretch_chance\"") &&
           strstr(hierarchy, "\"level\":\"retrig\"") &&
+          strstr(hierarchy, "\"retrig_16x\"") &&
+          strstr(hierarchy, "\"retrig_32x\"") &&
           strstr(hierarchy, "\"name\":\"Main\"") &&
           hierarchy[hierarchy_len - 1] == '}',
           "stretch controls appear in complete device UI hierarchy");
@@ -302,9 +310,11 @@ int main(int argc, char **argv) {
           "named Retrig page has no Preset control and precedes Stretch");
     CHECK(anchors_page && retrig_page && anchors_page < retrig_page &&
           strstr(hierarchy, "\"knobs\":[\"A_sample_path\",\"A_sample_length\",\"B_sample_path\",\"B_sample_length\",\"B_chance\",\"complexity\",\"phrase\",\"status\"]") &&
-          strstr(hierarchy, "\"access\":\"read\"") &&
           !strstr(hierarchy, "\"key\":\"save_preset\"") &&
-          !strstr(hierarchy, "\"key\":\"preset\""),
+          !strstr(hierarchy, "\"key\":\"preset\"") &&
+          !strstr(hierarchy, "\"key\":\"status_info\"") &&
+          !strstr(hierarchy, "\"key\":\"wave_a\"") &&
+          !strstr(hierarchy, "\"key\":\"wave_b\""),
           "Main shows status and Anchors has its own named page without custom presets");
     char chain_params[8192];
     api->get_param(instance, "chain_params", chain_params, sizeof(chain_params));
@@ -320,6 +330,14 @@ int main(int argc, char **argv) {
           "stretch controls retain short cell names and publish full header names");
     api->set_param(instance, "state", saved);
     char stretch_value[16];
+    api->get_param(instance, "retrig_16x", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "27") == 0,
+          "song state restores 16x retrigger chance");
+    api->get_param(instance, "retrig_32x", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "38") == 0,
+          "song state restores 32x retrigger chance");
+    api->set_param(instance, "retrig_16x", "0");
+    api->set_param(instance, "retrig_32x", "0");
     api->get_param(instance, "grain_cycle_ms", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "20") == 0,
           "song state restores stretch settings");
@@ -656,6 +674,21 @@ int main(int argc, char **argv) {
     CHECK(strcmp(status_info, "A1R3,0,0,0") == 0,
           "fullscreen detail reports retrigger without stale stretch values");
     api->set_param(reference, "retrig_3x", "0");
+
+    for (int rate = 0; rate < 2; rate++) {
+        const char *key = rate == 0 ? "retrig_16x" : "retrig_32x";
+        const char *expected = rate == 0 ? "A1R16,0,0,0" : "A1R32,0,0,0";
+        api->set_param(reference, key, "100");
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        send_clock_ticks(api, reference, 12, expected_audio);
+        api->get_param(reference, "status", status, sizeof(status));
+        api->get_param(reference, "status_info", status_info, sizeof(status_info));
+        CHECK(strcmp(status, "A1R") == 0 && strcmp(status_info, expected) == 0,
+              "high retrigger rate stays compact on Main and exact fullscreen");
+        api->set_param(reference, key, "0");
+    }
 
     api->set_param(reference, "stretch_chance", "100");
     api->set_param(reference, "stretch_length_min", "0");

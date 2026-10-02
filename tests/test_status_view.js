@@ -39,6 +39,8 @@ function rowHasValue(pixels, line) {
 for (const [detail, expected] of [
     ['A2,0,0,0', [false, false, false, false]],
     ['A2R4,0,0,0', [true, false, false, false]],
+    ['A2R16,0,0,0', [true, false, false, false]],
+    ['A2R32,0,0,0', [true, false, false, false]],
     ['B3S2,16,2,-12', [false, true, true, true]],
 ]) {
     const pixels = render(detail);
