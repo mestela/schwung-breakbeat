@@ -215,20 +215,25 @@ int main(int argc, char **argv) {
     api->set_param(instance, "pitch_lock", "1");
     api->set_param(instance, "grain_fx", "100");
     api->set_param(instance, "grain_cycle_ms", "20");
+    api->set_param(instance, "stretch_3x", "65");
     saved_len = api->get_param(instance, "state", saved, sizeof(saved));
     CHECK(saved_len > 0 && strstr(saved, "\"pitch_lock\":1") &&
           strstr(saved, "\"grain_fx\":100") &&
-          strstr(saved, "\"grain_cycle_ms\":20"),
+          strstr(saved, "\"grain_cycle_ms\":20") &&
+          strstr(saved, "\"stretch_3x\":65"),
           "stretch controls are saved in song state");
     api->set_param(instance, "pitch_lock", "0");
     api->set_param(instance, "grain_fx", "0");
     api->set_param(instance, "grain_cycle_ms", "40");
+    api->set_param(instance, "stretch_3x", "0");
 
     char hierarchy[8192];
     int hierarchy_len = api->get_param(instance, "ui_hierarchy", hierarchy,
                                        sizeof(hierarchy));
     CHECK(hierarchy_len > 0 && strstr(hierarchy, "\"pitch_lock\"") &&
           strstr(hierarchy, "\"grain_fx\"") &&
+          strstr(hierarchy, "\"level\":\"stretch\"") &&
+          strstr(hierarchy, "\"stretch_8x\"") &&
           hierarchy[hierarchy_len - 1] == '}',
           "stretch controls appear in complete device UI hierarchy");
     api->set_param(instance, "state", saved);
@@ -236,9 +241,13 @@ int main(int argc, char **argv) {
     api->get_param(instance, "grain_cycle_ms", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "20") == 0,
           "song state restores stretch settings");
+    api->get_param(instance, "stretch_3x", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "65") == 0,
+          "song state restores stretch probability");
     api->set_param(instance, "pitch_lock", "0");
     api->set_param(instance, "grain_fx", "0");
     api->set_param(instance, "grain_cycle_ms", "40");
+    api->set_param(instance, "stretch_3x", "0");
 
     snprintf(state, sizeof(state),
              "{\"preset_index\":0,\"sample_path\":\"%s\"," 
@@ -520,6 +529,66 @@ int main(int argc, char **argv) {
         api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
     CHECK(!buffers_equal(dry_late, expected_audio, MOVE_FRAMES_PER_BLOCK * 2),
           "Grain FX changes audio independently of Pitch Lock");
+
+    api->set_param(reference, "grain_fx", "0");
+    api->set_param(reference, "complexity", "0");
+    api->set_param(reference, "anchor", "0");
+    api->set_param(reference, "roll", "0");
+    const char *stretch_keys[4] = {
+        "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
+    };
+    const int stretch_spans[4] = {2, 3, 4, 8};
+    for (int kind = 0; kind < 4; kind++) {
+        for (int i = 0; i < 4; i++)
+            api->set_param(reference, stretch_keys[i], i == kind ? "100" : "0");
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        api->get_param(reference, "status", status, sizeof(status));
+        CHECK(status[0] == 'A' && status[2] == '0' &&
+              status[4] == '0' + stretch_spans[kind] && status[5] == 's',
+              "100% stretch holds the first slice for its selected span");
+        for (int slot = 1; slot < stretch_spans[kind]; slot++) {
+            send_clock_ticks(api, reference, 12, expected_audio);
+            api->get_param(reference, "status", status, sizeof(status));
+            CHECK(status[2] == '0' && status[5] == 's',
+                  "stretch does not retrigger at an occupied slice boundary");
+        }
+        send_clock_ticks(api, reference, 12, expected_audio);
+        api->get_param(reference, "status", status, sizeof(status));
+        CHECK(status[2] == '0' + (stretch_spans[kind] & 7) && status[5] == 's',
+              "automatic slicing resumes after the full stretch span");
+    }
+
+    for (int i = 0; i < 4; i++)
+        api->set_param(reference, stretch_keys[i], i == 2 ? "100" : "0");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    send_clock_ticks(api, reference, 9, expected_audio);
+    const uint8_t interrupt_pad[3] = {0x90, 41, 100};
+    api->on_midi(reference, interrupt_pad, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    send_clock_ticks(api, reference, 3, expected_audio);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "A_5_1x", 6) == 0,
+          "pad note replaces the held stretch on the next grid boundary");
+    send_clock_ticks(api, reference, 12, expected_audio);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "A_2_4s", 6) == 0,
+          "automatic stretch resumes after the manual pad's slice");
+
+    api->set_param(reference, "stretch_4x", "0");
+    api->set_param(reference, "stretch_8x", "100");
+    api->set_param(reference, "A_sample_length", "3"); /* 2 bars: four slots per bar */
+    api->set_param(reference, "phrase", "1"); /* 2 bars */
+    api->set_param(reference, "B_chance", "100");
+    api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+    api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+    api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+    send_clock_ticks(api, reference, 96, expected_audio);
+    api->get_param(reference, "status", status, sizeof(status));
+    CHECK(strncmp(status, "B_0_8s", 6) == 0,
+          "B phrase boundary interrupts an A stretch halfway through");
     api->destroy_instance(reference);
 
     api->destroy_instance(instance);

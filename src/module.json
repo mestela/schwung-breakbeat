@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -81,30 +81,8 @@
               "default": 0
             },
             {
-              "key": "pitch_lock",
-              "label": "Pitch Lock",
-              "type": "enum",
-              "options": [
-                "Off",
-                "On"
-              ],
-              "default": 0
-            },
-            {
-              "key": "grain_fx",
-              "label": "Grain FX",
-              "type": "int",
-              "min": 0,
-              "max": 100,
-              "default": 0
-            },
-            {
-              "key": "grain_cycle_ms",
-              "label": "Grain Cycle",
-              "type": "int",
-              "min": 10,
-              "max": 120,
-              "default": 40
+              "level": "stretch",
+              "label": "Stretch"
             },
             {
               "key": "complexity",
@@ -208,9 +186,6 @@
             "B_sample_path",
             "B_sample_length",
             "B_chance",
-            "pitch_lock",
-            "grain_fx",
-            "grain_cycle_ms",
             "complexity",
             "phrase",
             "anchor",
@@ -222,6 +197,78 @@
             "retrig_8x",
             "save_preset",
             "status"
+          ]
+        },
+        "stretch": {
+          "name": "Stretch",
+          "params": [
+            {
+              "key": "stretch_2x",
+              "label": "Stretch 2x",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "stretch_3x",
+              "label": "Stretch 3x",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "stretch_4x",
+              "label": "Stretch 4x",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "stretch_8x",
+              "label": "Stretch 8x",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "grain_fx",
+              "label": "Grain FX",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0
+            },
+            {
+              "key": "grain_cycle_ms",
+              "label": "Grain Cycle",
+              "type": "int",
+              "min": 10,
+              "max": 120,
+              "default": 40
+            },
+            {
+              "key": "pitch_lock",
+              "label": "Pitch Lock",
+              "type": "enum",
+              "options": [
+                "Off",
+                "On"
+              ],
+              "default": 0
+            }
+          ],
+          "knobs": [
+            "stretch_2x",
+            "stretch_3x",
+            "stretch_4x",
+            "stretch_8x",
+            "grain_fx",
+            "grain_cycle_ms",
+            "pitch_lock"
           ]
         }
       }

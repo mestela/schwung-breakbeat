@@ -73,6 +73,7 @@ typedef struct {
     uint32_t slice_lengths[8];
     int current_slice;
     float retrig_p[4];        /* [0]=2x [1]=3x [2]=4x [3]=8x, each 0..1 */
+    float stretch_p[4];       /* probability per bar of holding 2/3/4/8 slices */
     int sub_slice_active;
     int sub_slice_counter;
     int retrigger_divisions;
@@ -81,6 +82,8 @@ typedef struct {
     int pending_manual_slice; /* note selected at the current slice clock */
     int manual_slice_active;  /* use the played loop's own length until handback */
     int suppress_next_preset_preview; /* first host preset assignment is restore */
+    int stretch_span;         /* current automatic slice duration in grid slots */
+    int stretch_remaining;    /* later boundaries still owned by this slice */
     int pitch_lock;           /* preserve source pitch as tempo changes */
     int grain_fx;             /* 0..100, probability of repeated grain pairs */
     int grain_cycle_ms;       /* source grain duration */
@@ -274,8 +277,9 @@ static void bb_update_status(breakbeat_t *bb) {
     bb->status_str[1] = '_';
     bb->status_str[2] = (char)('0' + (bb->current_slice & 7));
     bb->status_str[3] = '_';
-    bb->status_str[4] = (char)('0' + div);
-    bb->status_str[5] = 'x';
+    bb->status_str[4] = (char)('0' +
+        ((bb->stretch_span > 1) ? bb->stretch_span : div));
+    bb->status_str[5] = (bb->stretch_span > 1) ? 's' : 'x';
     bb->status_str[6] = '\0';
 }
 
@@ -407,7 +411,7 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "{\"modes\":null,\"levels\":{\"root\":{"
         "\"list_param\":\"preset\",\"count_param\":\"preset_count\",\"name_param\":\"preset_name\","
         "\"knobs\":[\"preset\",\"A_sample_path\",\"A_sample_length\",\"B_sample_path\",\"B_sample_length\","
-        "\"B_chance\",\"pitch_lock\",\"grain_fx\",\"grain_cycle_ms\",\"complexity\",\"phrase\",\"anchor\",\"roll\",\"fill\","
+        "\"B_chance\",\"complexity\",\"phrase\",\"anchor\",\"roll\",\"fill\","
         "\"retrig_2x\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\",\"save_preset\",\"status\"],"
         "\"params\":["
         "{\"key\":\"preset\",\"label\":\"Preset\",\"type\":\"int\",\"min\":0,\"max\":10},"
@@ -416,9 +420,7 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "{\"key\":\"B_sample_path\",\"label\":\"B Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
         "{\"key\":\"B_sample_length\",\"label\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
         "{\"key\":\"B_chance\",\"label\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"pitch_lock\",\"label\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
-        "{\"key\":\"grain_fx\",\"label\":\"Grain FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
-        "{\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120},"
+        "{\"level\":\"stretch\",\"label\":\"Stretch\"},"
         "{\"key\":\"complexity\",\"label\":\"Complexity\",\"type\":\"int\",\"min\":0,\"max\":100},"
         "{\"key\":\"phrase\",\"label\":\"Phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"]},"
         "{\"key\":\"anchor\",\"label\":\"Anchor\",\"type\":\"int\",\"min\":0,\"max\":100},"
@@ -430,6 +432,16 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "{\"key\":\"retrig_8x\",\"label\":\"Retrig 8x\",\"type\":\"int\",\"min\":0,\"max\":100},"
         "{\"key\":\"save_preset\",\"label\":\"Save Preset\",\"type\":\"int\",\"min\":0,\"max\":1},"
         "{\"key\":\"status\",\"label\":\"Status\",\"type\":\"enum\",\"options\":[\"-\"]}"
+        "]},\"stretch\":{\"name\":\"Stretch\","
+        "\"knobs\":[\"stretch_2x\",\"stretch_3x\",\"stretch_4x\",\"stretch_8x\",\"grain_fx\",\"grain_cycle_ms\",\"pitch_lock\"],"
+        "\"params\":["
+        "{\"key\":\"stretch_2x\",\"label\":\"Stretch 2x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_3x\",\"label\":\"Stretch 3x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_4x\",\"label\":\"Stretch 4x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_8x\",\"label\":\"Stretch 8x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"grain_fx\",\"label\":\"Grain FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120},"
+        "{\"key\":\"pitch_lock\",\"label\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]}"
         "]}}}",
         ar, br);
 }
@@ -446,6 +458,10 @@ static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
         "{\"key\":\"B_sample_path\",\"name\":\"B Sample\",\"type\":\"filepath\",\"root\":\"%s\",\"filter\":\".wav\"},"
         "{\"key\":\"B_sample_length\",\"name\":\"B Length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"]},"
         "{\"key\":\"B_chance\",\"name\":\"B Chance\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_2x\",\"name\":\"Stretch 2x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_3x\",\"name\":\"Stretch 3x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_4x\",\"name\":\"Stretch 4x\",\"type\":\"int\",\"min\":0,\"max\":100},"
+        "{\"key\":\"stretch_8x\",\"name\":\"Stretch 8x\",\"type\":\"int\",\"min\":0,\"max\":100},"
         "{\"key\":\"pitch_lock\",\"name\":\"Pitch Lock\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
         "{\"key\":\"grain_fx\",\"name\":\"Grain FX\",\"type\":\"int\",\"min\":0,\"max\":100},"
         "{\"key\":\"grain_cycle_ms\",\"name\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120},"
@@ -944,6 +960,17 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
         if (ival > 120) ival = 120;
         bb->grain_cycle_ms = ival;
     }
+    static const char *stretch_keys[4] = {
+        "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
+    };
+    for (int i = 0; i < 4; i++) {
+        bb->stretch_p[i] = 0.0f;
+        if (json_get_float(json, stretch_keys[i], &fval)) {
+            if (fval < 0.0f) fval = 0.0f;
+            if (fval > 100.0f) fval = 100.0f;
+            bb->stretch_p[i] = fval / 100.0f;
+        }
+    }
 
     if (json_get_string(json, "A_sample_path", str_val, sizeof(str_val)))
         resolve_sample_path(bb->module_dir, str_val, bb->main_sample_path, sizeof(bb->main_sample_path));
@@ -1052,6 +1079,9 @@ static void* bb_create_instance(const char *module_dir, const char *json_default
 
     bb->preset_idx = 0;
     bb->retrig_p[0] = bb->retrig_p[1] = bb->retrig_p[2] = bb->retrig_p[3] = 0.0f;
+    for (int i = 0; i < 4; i++) bb->stretch_p[i] = 0.0f;
+    bb->stretch_span = 1;
+    bb->stretch_remaining = 0;
     bb->sub_slice_active = 0;
     bb->sub_slice_counter = 0;
     bb->retrigger_divisions = 2;
@@ -1173,6 +1203,8 @@ static void bb_start_preview(breakbeat_t *bb) {
     bb->play_pos            = (float)bb->slice_starts[0];
     bb_grain_reset(&bb->grain);
     bb->current_slice       = 0;
+    bb->stretch_span        = 1;
+    bb->stretch_remaining   = 0;
     bb->trigger_phase       = 0.0f;
     bb->bar_phase           = 0.0f;
     bb->trigger_count       = 0;
@@ -1192,6 +1224,8 @@ static void bb_reset_transport(breakbeat_t *bb) {
     bb->trigger_count     = 0;
     bb->bar_counter       = 0;
     bb->current_slice     = 0;
+    bb->stretch_span      = 1;
+    bb->stretch_remaining = 0;
     bb_grain_reset(&bb->grain);
     bb->sub_slice_active  = 0;
     bb->sub_slice_counter = 0;
@@ -1233,6 +1267,8 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             bb->pending_manual_slice = -1;
             bb->manual_slice_active = 0;
             bb->sub_slice_active = 0;
+            bb->stretch_span = 1;
+            bb->stretch_remaining = 0;
         }
         if (msg[0] == 0xF8 && was_awaiting_first_tick &&
             bb->queued_slice >= 0) {
@@ -1398,6 +1434,19 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->grain_cycle_ms > 120) bb->grain_cycle_ms = 120;
         bb_grain_reset(&bb->grain);
     }
+    else if (strcmp(key, "stretch_2x") == 0 ||
+             strcmp(key, "stretch_3x") == 0 ||
+             strcmp(key, "stretch_4x") == 0 ||
+             strcmp(key, "stretch_8x") == 0) {
+        static const char *keys[4] = {
+            "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
+        };
+        float probability = atof(val) / 100.0f;
+        if (probability < 0.0f) probability = 0.0f;
+        if (probability > 1.0f) probability = 1.0f;
+        for (int i = 0; i < 4; i++)
+            if (strcmp(key, keys[i]) == 0) bb->stretch_p[i] = probability;
+    }
     else if (strcmp(key, "anchor") == 0) {
         bb->anchor = atof(val) / 100.0f;
         if (bb->anchor < 0.0f) bb->anchor = 0.0f;
@@ -1506,6 +1555,10 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
                 fprintf(f, "  \"pitch_lock\": %d,\n", bb->pitch_lock);
                 fprintf(f, "  \"grain_fx\": %d,\n", bb->grain_fx);
                 fprintf(f, "  \"grain_cycle_ms\": %d,\n", bb->grain_cycle_ms);
+                fprintf(f, "  \"stretch_2x\": %d,\n", (int)(bb->stretch_p[0] * 100.0f));
+                fprintf(f, "  \"stretch_3x\": %d,\n", (int)(bb->stretch_p[1] * 100.0f));
+                fprintf(f, "  \"stretch_4x\": %d,\n", (int)(bb->stretch_p[2] * 100.0f));
+                fprintf(f, "  \"stretch_8x\": %d,\n", (int)(bb->stretch_p[3] * 100.0f));
                 fprintf(f, "  \"complexity\": %d,\n", (int)(bb->complexity * 100.0f));
                 fprintf(f, "  \"phrase\": \"%s\",\n", phrases[phrase_idx]);
                 fprintf(f, "  \"anchor\": %d,\n", (int)(bb->anchor * 100.0f));
@@ -1580,6 +1633,16 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             if (i < 10) i = 10;
             if (i > 120) i = 120;
             bb->grain_cycle_ms = i;
+        }
+        static const char *stretch_keys[4] = {
+            "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
+        };
+        for (int k = 0; k < 4; k++) {
+            if (json_get_int(val, stretch_keys[k], &i)) {
+                if (i < 0) i = 0;
+                if (i > 100) i = 100;
+                bb->stretch_p[k] = (float)i / 100.0f;
+            }
         }
         if (json_get_int(val, "anchor", &i)) {
             bb->anchor = (float)i / 100.0f;
@@ -1712,6 +1775,17 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     else if (strcmp(key, "grain_cycle_ms") == 0) {
         return snprintf(buf, buf_len, "%d", bb->grain_cycle_ms);
     }
+    else if (strcmp(key, "stretch_2x") == 0 ||
+             strcmp(key, "stretch_3x") == 0 ||
+             strcmp(key, "stretch_4x") == 0 ||
+             strcmp(key, "stretch_8x") == 0) {
+        static const char *keys[4] = {
+            "stretch_2x", "stretch_3x", "stretch_4x", "stretch_8x"
+        };
+        for (int i = 0; i < 4; i++)
+            if (strcmp(key, keys[i]) == 0)
+                return snprintf(buf, buf_len, "%d", (int)(bb->stretch_p[i] * 100.0f));
+    }
     else if (strcmp(key, "anchor") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->anchor * 100.0f));
     }
@@ -1777,7 +1851,8 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"preset_index\":%d,\"sample_path\":\"%s\",\"alt_sample_path\":\"%s\","
             "\"length\":%d,\"alt_length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,"
             "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"swap_prob\":%d,"
-            "\"pitch_lock\":%d,\"grain_fx\":%d,\"grain_cycle_ms\":%d}",
+            "\"pitch_lock\":%d,\"grain_fx\":%d,\"grain_cycle_ms\":%d,"
+            "\"stretch_2x\":%d,\"stretch_3x\":%d,\"stretch_4x\":%d,\"stretch_8x\":%d}",
             bb->preset_idx,
             bb->main_sample_path, bb->alt_sample_path,
             len_idx, alt_len_idx,
@@ -1786,10 +1861,34 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             (int)(bb->retrig_p[0] * 100.0f), (int)(bb->retrig_p[1] * 100.0f),
             (int)(bb->retrig_p[2] * 100.0f), (int)(bb->retrig_p[3] * 100.0f),
             (int)(bb->swap_prob * 100.0f),
-            bb->pitch_lock, bb->grain_fx, bb->grain_cycle_ms);
+            bb->pitch_lock, bb->grain_fx, bb->grain_cycle_ms,
+            (int)(bb->stretch_p[0] * 100.0f), (int)(bb->stretch_p[1] * 100.0f),
+            (int)(bb->stretch_p[2] * 100.0f), (int)(bb->stretch_p[3] * 100.0f));
     }
     
     return -1;
+}
+
+static void bb_roll_stretch(breakbeat_t *bb) {
+    static const int spans[4] = {2, 3, 4, 8};
+    int candidates[4];
+    int count = 0;
+    float slots_per_bar = (bb->active_length > 0.0f)
+                        ? 8.0f / bb->active_length : 8.0f;
+    float inverse_slots = 1.0f / slots_per_bar;
+    bb->stretch_span = 1;
+    bb->stretch_remaining = 0;
+    for (int i = 0; i < 4; i++) {
+        float p_bar = bb->stretch_p[i];
+        if (p_bar <= 0.0f) continue;
+        float p_slot = (p_bar >= 1.0f) ? 1.0f
+                     : 1.0f - powf(1.0f - p_bar, inverse_slots);
+        if (bb_rand(bb) < p_slot) candidates[count++] = spans[i];
+    }
+    if (count > 0) {
+        bb->stretch_span = candidates[bb_random_u32(bb) % (uint32_t)count];
+        bb->stretch_remaining = bb->stretch_span - 1;
+    }
 }
 
 static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
@@ -1808,6 +1907,17 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
                       ? beat_pos
                       : slice_select_next(&in, bb_rand, bb);
     bb->sub_slice_counter = 0;
+    bb_roll_stretch(bb);
+
+    if (bb->stretch_span > 1) {
+        /* A held slice takes whole grid slots; retrigger subdivisions would
+         * fight its duration and grain cursor. */
+        bb->sub_slice_active = 0;
+        bb_update_status(bb);
+        bb->play_pos = (float)bb->slice_starts[bb->current_slice];
+        bb_grain_reset(&bb->grain);
+        return;
+    }
 
     static const int retrigger_divs[4] = {2, 3, 4, 8};
     float triggers_per_bar = (bb->active_length > 0.0f)
@@ -1946,6 +2056,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
                     bb->current_slice = 0;
                     bb->play_pos = (float)bb->slice_starts[0];
                     bb_grain_reset(&bb->grain);
+                    bb_roll_stretch(bb);
                     bb->sub_slice_active = 0;
                     bb->sub_slice_counter = 0;
                     bb_update_status(bb);
@@ -1958,6 +2069,10 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         bb->just_reset = 0;
         bb->play_pos = (float)bb->slice_starts[0];
         bb_grain_reset(&bb->grain);
+        if (running && bb->pending_manual_slice < 0) {
+            bb_roll_stretch(bb);
+            bb_update_status(bb);
+        }
     }
 
     if ((running || previewing) && bb->pending_manual_slice >= 0) {
@@ -1972,14 +2087,20 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
             bb_grain_reset(&bb->grain);
             bb->playing = 1;
             bb->sub_slice_active = 0;
+            bb->stretch_span = 1;
+            bb->stretch_remaining = 0;
             bb->manual_slice_active = running;
             bb_update_status(bb);
         }
     } else if (running && bb->pending_trigger) {
         bb->pending_trigger = 0;
-        bb_select_loop(bb, bb->auto_loop, 1);
-        bb->manual_slice_active = 0;
-        bb_fire_trigger(bb, bb->pending_beat_pos);
+        if (bb->stretch_remaining > 0) {
+            bb->stretch_remaining--;
+        } else {
+            bb_select_loop(bb, bb->auto_loop, 1);
+            bb->manual_slice_active = 0;
+            bb_fire_trigger(bb, bb->pending_beat_pos);
+        }
     }
 
     /* Rate is exact from the current Set BPM on the first block. MIDI clock
@@ -1991,8 +2112,10 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
                                                playback_length, MOVE_SAMPLE_RATE);
     float slice_len = (bb->current_slice < 8)
                     ? (float)bb->slice_lengths[bb->current_slice] : 0.0f;
-    float rate = (slice_len > 0.0f && spt > 0.0f) ? slice_len / spt : 1.0f;
-    int grain_enabled = bb->pitch_lock || bb->grain_fx > 0;
+    float rate = (slice_len > 0.0f && spt > 0.0f)
+               ? slice_len / (spt * (float)bb->stretch_span) : 1.0f;
+    int grain_enabled = bb->pitch_lock || bb->grain_fx > 0 || bb->stretch_span > 1;
+    int grain_pitch_lock = bb->pitch_lock || bb->stretch_span > 1;
     int cycle_frames = bb->grain_cycle_ms * MOVE_SAMPLE_RATE / 1000;
     
     for (int i = 0; i < frames; i++) {
@@ -2012,7 +2135,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         float fL, fR;
         if (grain_enabled) {
             bb_grain_frame_t grain_frame = bb_grain_next(&bb->grain,
-                bb->play_pos, rate, cycle_frames, bb->pitch_lock, bb->grain_fx);
+                bb->play_pos, rate, cycle_frames, grain_pitch_lock, bb->grain_fx);
             uint32_t grain_idx = bb_grain_sample_index(bb, grain_frame.current_pos);
             bb_read_frame(bb, grain_idx, &fL, &fR);
             if (grain_frame.previous_gain > 0.0f) {
