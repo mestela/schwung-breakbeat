@@ -33,5 +33,15 @@ source = source_path.read_text()
 start = source.index("static void build_ui_hierarchy(")
 end = source.index("/* Create the filepath browser", start)
 hierarchy = {"modes": None, "levels": levels, "params": flat}
+# The host's UI response buffer is 8192 bytes. Page-local definitions and
+# chain_params already describe these controls; repeating them in the flat
+# hierarchy list would truncate the response after adding eight anchors.
+hierarchy["params"] = [item for item in flat
+                       if not item["key"].startswith("anchor_")
+                       and not item["key"].startswith("retrig_")
+                       and item["key"] not in ("attack_ms", "decay_ms", "status",
+                                               "A_sample_path", "A_sample_length", "B_sample_path",
+                                               "mode_a", "mode_b", "edit_a", "edit_b",
+                                               "early_end")]
 replacement = function("build_ui_hierarchy", hierarchy) + function("build_chain_params", flat)
 source_path.write_text(source[:start] + replacement + source[end:])

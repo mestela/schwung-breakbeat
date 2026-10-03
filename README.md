@@ -1,12 +1,10 @@
 # Breakbeat Generator for Schwung
 
-A musically-anchored breakbeat slicer for Ableton Move (via Schwung).
-
-Loads a WAV breakbeat, slices it into 8 equal parts, and recombines them per
-trigger using biased-random selection. Designed for jungle, DnB, and breakbeat-
-driven dance music: classic breaks (Amen, Funky Drummer, Think, Apache, etc.)
-keep their kick-snare backbone via the **Anchor** knob, while **Roll**, **Fill**,
-and **Phrase** add motion, fills, and multi-bar phrasing.
+A breakbeat slicer for Ableton Move (via Schwung). It loads WAV audio into
+eight slices and recombines them on the Move grid. Grid slicing is the default;
+each break can instead use eight manually placed starts. Complexity sets how
+often the pattern changes, and eight position anchors can keep particular
+slices in place.
 
 Demo: https://www.youtube.com/watch?v=vYf1vPt3pMc
 
@@ -22,50 +20,70 @@ This uses midi out to get timing from the Move side of things. I tried (and fail
 
 ### Main page
 
-| Knob | Range | What it does |
+| Control | Range | What it does |
 |---|---|---|
-| **Complexity** | 0–100 | Probability that any given trigger picks a *random* slice instead of advancing in order. At 0, slices follow beat position (or Anchor if engaged). At 100, every non-stay trigger rolls a fresh random slice. |
+| **Complexity** | 0–100 | Chance that each grid position proposes a different slice. At 0, the sample plays in order. |
 
 Main also shows the current sample, slice, and playback mode. `A2` means A
 slice 2 is playing normally, `A2R4` means it is retriggering four times, and
 `B3S2` means B slice 3 is stretched across two slice slots. Press Status to
 open a fullscreen view of both sample waveforms and their eight slice zones;
-the active zone highlights. The right side always labels retrigger, stretch
-length, stretch slice count, and stretch pitch, with values only for the active
-effect. Custom Preset and Save Preset controls
-have been removed from the page; Schwung saves the parameters with the Set.
+the active zone highlights. Schwung saves parameters with the Set.
 
-Main also contains the sample and phrase settings:
+The **Slicing** page has five controls in order: **A Mode**, **Edit A**,
+**B Mode**, **Edit B**, and **Early End**. Each mode is Grid or Manual. Open an editor to see
+the full sample waveform and all eight starts. Touch any of the eight knobs
+to zoom in on that start; the marker stays centered as the waveform scrolls
+under it. Turn to move the start by 1 ms per step, and release to return to
+the full waveform. Hold Shift while turning for 0.1 ms steps. Moving a marker also
+changes the end of the previous source slice; playback speed stays fixed.
+Editing a marker automatically selects Manual mode for that break. Marker
+positions and A/B modes are saved with the Set.
+
+**Early End** defaults to Silence. Reverse bounces an ordinary slice back
+through its source segment when it reaches the next slice start before the
+next grid trigger. If it reaches its own start, it bounces forward again.
+Retriggered and stretched slices keep their existing playback behavior.
 
 | Setting | Values | What it does |
 |---|---|---|
-| **A Sample** | filepath | Selects which WAV to slice. Opens file browser rooted at `/data/UserData/breakbeat-samples`, which contains a `Built-in/` folder and a `User Library/` symlink to your device's sample library. |
-| **A Length** | enum | Trigger interval for A loop (1/4 bar to 8 bars). |
-| **B Sample** | filepath | Selects the loop used for phrase fills. |
-| **B Length** | enum | Trigger interval for B loop (1/4 bar to 8 bars). |
-| **B Chance** | 0–100 | Probability of swapping to B Loop on the last bar of a phrase. |
-| **Phrase** | enum | Multi-bar phrase length (Off, 2, 4, 8, 16 bars). |
+| **A Sample** | WAV filepath | Selects the main sample. |
+| **A Length** | 1/4 to 8 bars | Sets the A slice trigger interval. |
+| **B Sample** | WAV filepath | Selects the optional phrase-fill sample. |
+| **B Length** | 1/4 to 8 bars | Sets the B slice trigger interval. |
+| **B Chance** | 0–100 | Chance of playing B on the final bar of a phrase. |
+| **Phrase** | Off, 2, 4, 8, 16 bars | Sets the phrase length. |
 
 ### Anchors page
 
-| Knob | Range | What it does |
-|---|---|---|
-| **Anchor** | 0–100 | Locks slice index to *beat position* in the bar. At 0, behavior is sequential advance with Complexity-driven random swaps. At 100, beats 1 and 3 (kick/snare) are protected from swaps and the no-swap fallback snaps to `beat_position`. |
-| **Roll** | 0–100 | Temporal stickiness. At 0, every trigger is independent. At 100, most triggers either repeat the current slice, walk to the ±1 neighbor, or take a 5% escape-hatch jump. Produces the rolling jungle "1 2 3 1 2 3 4 5" feel and held-slice stutters. |
-| **Fill** | 0–100 | Intensity of the *fill bar* modulation. Only meaningful when **Phrase** is non-Off. Modulates Complexity ↑, Roll ↓, Anchor ↓ on the last bar of every phrase. At 100, the fill bar throws out the groove rules entirely. |
+The eight knobs are **Slice 1** through **Slice 8**. Each one protects its
+matching grid position: Slice 1 at position 1, Slice 2 at position 2, and so
+on. At 0, Complexity acts normally. At 100, that position always plays its
+matching slice. Intermediate values make this a probability. These controls
+apply to both A and B samples.
+
+### Envelope page
+
+**Attack** and **Decay** each run from 0 to 250 ms and default to 0. Attack
+fades in the start of a slice; Decay fades out its end. They apply to automatic
+slices, live pads, and retriggers. A few milliseconds can soften clicks; longer
+settings shape ambient or found-sound phrases. If a fade is longer than the
+slice's available time, it is naturally shortened by the next trigger.
 
 ### Retrig page
 
 | Control | Range | What it does |
 |---|---|---|
 | **Retrig 2x** | 0–100 | Per-bar probability of a 2x (half-slice) stutter on any given beat. |
+| **Push 2x** | 0–100 | Two hits at the start and 1/4 of the slice, like the first two hits of a 4x retrigger; the second hit plays out for the remaining 3/4. |
+| **Drag 2x** | 0–100 | Two hits, with the repeat at 3/4 of the slice (a dotted 16th when the slice is an eighth note). |
 | **Retrig 3x** | 0–100 | Per-bar probability of a 3x stutter. |
 | **Retrig 4x** | 0–100 | Per-bar probability of a 4x stutter. |
 | **Retrig 8x** | 0–100 | Per-bar probability of an 8x (16th-note micro-stutter) on any given beat. |
 | **Retrig 16x** | 0–100 | Per-bar probability of a 16x micro-stutter. |
 | **Retrig 32x** | 0–100 | Per-bar probability of a 32x micro-stutter. |
 
-The six retrigger knobs are independent. If several win on one slice, one rate
+The eight retrigger knobs are independent. If several win on one slice, one rate
 is chosen at random. At 16x or 32x the compact Main status shows `A2R` to fit;
 the fullscreen view shows the exact rate.
 
@@ -115,33 +133,20 @@ Custom samples can be loaded via the file browser for **A Sample** and **B Sampl
 
 ## How the algorithm picks slices
 
-Each trigger tick:
+At each of the eight grid positions, Complexity proposes a different slice.
+The corresponding Anchor knob can reject that proposal and keep the matching
+slice. A random replacement always differs from the natural slice, so
+Complexity 100 and Anchor 0 audibly changes every position. Phrase and B Chance
+can switch to B on the final phrase bar. Retrigger and stretch effects are
+applied after slice selection.
 
-1. **Phrase modulation** — if Phrase is set and we're on the fill bar, Complexity is pushed up, Roll and Anchor are pushed down (proportional to Fill).
-2. **Roll the dice** — random number `r ∈ [0,1)`:
-   - If `r < (1 - Roll)` → **Move** branch (independent decision)
-   - Otherwise → **Stay** branch (correlated with previous slice)
-3. **Move branch:**
-   - Compute swap probability: `p_swap = Complexity * weight_at(beat_position, Anchor)`
-   - If we swap → uniform random slice 0..7
-   - Else → play `beat_position` (the natural slice for this beat)
-4. **Stay branch:**
-   - 5% escape hatch: jump 2..4 forward
-   - Otherwise: with probability `(1 - weight_at(current_slice, Anchor))` repeat current; else walk ±1
+Existing Sets with the old single Anchor value map it to positions 1 and 5,
+which were its most protected positions. Old Roll and Fill values remain
+readable for Set compatibility but no longer affect slice selection.
 
-The **anchor weight curve** at Anchor=100 is `[0.0, 0.5, 1.0, 0.7, 0.0, 0.5, 1.0, 1.2]`:
-- Slices 0 and 4 (beats 1 and 3) → weight 0 → never swap (kick/snare locked)
-- Slice 7 (last 16th) → weight 1.2 → *more* likely to swap than baseline (fill territory)
-
-Reseed happens automatically on transport start, so each play produces a fresh stochastic realization.
-
-## Knob interactions worth knowing
-
-- **Anchor=0, Roll=0, Phrase=Off** → original module behavior: sequential advance with Complexity-driven random swaps.
-- **Anchor=100, Roll=0, Complexity=0** → straight playback of the break in beat order. At Length=0.5, this means slices 0, 2, 4, 6 (the structural beats only); at Length=0.25, slices 0..7 in order.
-- **Anchor=100, Roll=100, Complexity=50** → camped on slice 0 with occasional ±1 walks and rare 5% escape jumps. Heavy stutter feel.
-- **Anchor=80, Roll=70, Phrase=4, Fill=70** → bars 1–3 groove, bar 4 audibly opens up into a fill, bar 1 of the next phrase resets.
-- **Phrase=2, Fill=100** → every other bar feels wild.
+Manual markers always remain in source order. Each slice ends where the next
+one begins, and the last slice ends at the sample end. Grid mode uses the
+original eight equal divisions.
 
 ## Built-in Presets
 
@@ -201,6 +206,14 @@ ssh-keygen -R move.local
 ```
 
 ## Changelog
+
+### v0.4.47
+- **Eight position anchors.** Each knob protects its matching slice position; old single-anchor Sets remain compatible.
+- **Manual slicing for A and B.** Edit eight start markers against the waveform with a centered, fine-grained zoom. Source playback speed stays fixed.
+- **Attack and decay.** Independent 0–250 ms fades soften clicks or shape longer found-sound phrases.
+- **Early-end reverse.** Ordinary slices can bounce back through their source segment when they end before the next grid trigger.
+- **Push and Drag repeats.** Two-hit Push repeats at one-quarter of a slice; dotted Drag repeats at three-quarters. Both have independent probability knobs beside the straight retriggers.
+- **Page cleanup.** Slicing and Envelope have their own pages, and the pages follow the Main, Anchors, Slicing, Retrig, Stretch, Master, Envelope order.
 
 ### v0.4.31
 - **Compact status.** Main uses `A2R4` and `B3S2` codes that fit Schwung's standard canvas cell. Stretch status reports occupied slices.

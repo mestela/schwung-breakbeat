@@ -14,6 +14,7 @@
 #include "slice_select.h"
 #include "bb_timing.h"
 #include "grain_stretch.h"
+#include "manual_slices.h"
 #include <time.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -25,8 +26,8 @@
 #define WAV_FORMAT_FLOAT 3
 
 #define BB_PATH_MAX 512
-#define BB_WAVE_BINS 64
-#define BB_RETRIG_COUNT 6
+#define BB_WAVE_BINS 128
+#define BB_RETRIG_COUNT 8
 
 typedef struct {
     int fd;
@@ -34,6 +35,7 @@ typedef struct {
     size_t map_size;
     void *data;
     uint32_t total_frames;
+    uint32_t sample_rate;
     int num_channels;
     int audio_format;
     int bits_per_sample;
@@ -56,6 +58,16 @@ typedef struct {
     float roll;
     int   phrase_bars;
     float fill;
+    float anchors[8];        /* probability of preserving each grid position */
+    int slice_modes[2];       /* independent A/B: 0=grid, 1=manual */
+    uint32_t slice_positions[2][8]; /* millionths of the source sample */
+    int load_slice_mode;
+    uint32_t load_slice_positions[8];
+    int early_end;            /* 0=silence, 1=reflect ordinary slices */
+    int attack_ms;
+    int decay_ms;
+    uint32_t envelope_frame;
+    uint32_t envelope_total;
     float loop_gain[2];       /* A/B volume, 0..1; default unity */
     int note_quant_ticks;     /* note grid: 12 (8ths) or 6 (16ths) MIDI clocks */
     int   bar_counter;
@@ -67,6 +79,7 @@ typedef struct {
     size_t map_size;
     void *data;
     uint32_t total_frames;
+    uint32_t sample_rate;
     float play_pos;
     int num_channels;
     int audio_format;
@@ -78,7 +91,7 @@ typedef struct {
     uint32_t slice_lengths[8];
     char waveform[BB_WAVE_BINS + 1];
     int current_slice;
-    float retrig_p[BB_RETRIG_COUNT]; /* 2x, 3x, 4x, 8x, 16x, 32x; each 0..1 */
+    float retrig_p[BB_RETRIG_COUNT]; /* straight 2/3/4/8/16/32, Push 2x, Drag 2x */
     float stretch_chance;     /* per-slice chance of grain stretching */
     int stretch_length_min, stretch_length_max; /* UI 0..100 maps to 2x..16x */
     int stretch_slice_min, stretch_slice_max;   /* UI 0..100 maps to 1..8 slots */
@@ -89,6 +102,7 @@ typedef struct {
     int sub_slice_active;
     int sub_slice_counter;
     int retrigger_divisions;
+    int retrigger_variant;    /* 0=straight, 1=Push, 2=Drag */
     int preview_frames;       /* >0 = play preview even while transport stopped */
     int queued_slice;         /* note 36-51 waiting for the next slice clock */
     int pending_manual_slice; /* note selected at the current slice clock */
@@ -114,7 +128,7 @@ typedef struct {
      *   ticks_per_trigger = 12 * active_length
      *   (96 ticks/bar ÷ 8 slices/bar = 12 ticks/slice at 1-bar length)
      *
-     * Playback rate: rate = slice_length / samples_per_trigger
+     * Playback rate: rate = grid_slice_length / samples_per_trigger
      *   samples_per_trigger is measured from the actual sample-counter distance
      *   between two consecutive trigger ticks — no BPM math required.
      *
@@ -201,6 +215,8 @@ typedef struct {
 
 static void bb_read_frame(const breakbeat_t *bb, uint32_t idx,
                           float *left, float *right);
+static void bb_read_sample_frame(const void *data, int nch, int format, int bits,
+                                 uint32_t idx, float *left, float *right);
 
 /* Called after a sample is loaded, never from the audio callback. */
 static void bb_build_waveform(breakbeat_t *bb) {
@@ -309,7 +325,14 @@ static float bb_rand(void *ctx) {
 }
 
 static int bb_clamp_percent(int value);
-
+static void bb_read_frame(const breakbeat_t *bb, uint32_t idx,
+                          float *left, float *right);
+static char bb_status_effect(unsigned kind, unsigned variant) {
+    if (kind == 2u) return 'S';
+    if (kind == 1u && variant == 1u) return 'P';
+    if (kind == 1u && variant == 2u) return 'D';
+    return 'R';
+}
 static void bb_update_status(breakbeat_t *bb) {
     unsigned kind = bb->stretch_length > 1 ? 2u
                   : (bb->sub_slice_active ? 1u : 0u);
@@ -319,7 +342,8 @@ static void bb_update_status(breakbeat_t *bb) {
                   | ((unsigned)(bb->current_slice & 7) << 1)
                   | (bb->current_loop == 'B' ? 1u : 0u)
                   | ((kind == 2u ? (unsigned)bb->stretch_length : 0u) << 12)
-                  | ((kind == 2u ? (unsigned)(bb->stretch_pitch_semitones + 12) : 0u) << 17);
+                  | ((kind == 2u ? (unsigned)(bb->stretch_pitch_semitones + 12) : 0u) << 17)
+                  | ((kind == 1u ? (unsigned)bb->retrigger_variant : 0u) << 22);
     atomic_store_explicit(&bb->status_word, word, memory_order_relaxed);
 }
 
@@ -399,6 +423,7 @@ static void close_file(breakbeat_t *wp) {
     wp->map_size = 0;
     wp->data = NULL;
     wp->total_frames = 0;
+    wp->sample_rate = 0;
     wp->play_pos = 0;
     wp->num_channels = 0;
     wp->audio_format = 0;
@@ -459,61 +484,66 @@ static void build_ui_hierarchy(const breakbeat_t *bb, char *out, int out_len) {
         "el\":\"Phrase Length\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\""
         "},{\"key\":\"status\",\"label\":\"Playback Status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":\"status_view"
         ".js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wave_a\",\"wave_"
-        "b\"]},{\"level\":\"anchors\",\"label\":\"Anchors\"},{\"level\":\"retrig\",\"label\":\"Retrig\"},{\"level\":\"stretch\",\"label\":\"Str"
-        "etch\"},{\"level\":\"master\",\"label\":\"Master\"}]},\"anchors\":{\"name\":\"Anchors\",\"knobs\":[\"anchor\",\"roll\",\"fill\"],\"par"
-        "ams\":[{\"key\":\"anchor\",\"label\":\"Anchor Strength\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\"},{\"key\":\""
-        "roll\",\"label\":\"Roll Amount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\"},{\"key\":\"fill\",\"label\":\"Fill Am"
-        "ount\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\"}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2x\",\"re"
-        "trig_3x\",\"retrig_4x\",\"retrig_8x\",\"retrig_16x\",\"retrig_32x\"],\"params\":[{\"key\":\"retrig_2x\",\"label\":\"Retrigger 2x"
-        "\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_3x\",\"label\":\"Retrigger 3x\",\"type\":\"i"
-        "nt\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\",\"label\":\"Retrigger 4x\",\"type\":\"int\",\"min\":0"
-        ",\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Retrigger 8x\",\"type\":\"int\",\"min\":0,\"max\":100,"
-        "\"short_name\":\"Retrig 8x\"},{\"key\":\"retrig_16x\",\"label\":\"Retrigger 16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_na"
-        "me\":\"R16x\"},{\"key\":\"retrig_32x\",\"label\":\"Retrigger 32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\"}]},"
-        "\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_length_min\",\"stretch_length_max\",\"stretch_slice"
-        "_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_max\"],\"params\":[{\"key\":\"stretch_chance\",\"label\":\""
-        "Stretch Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\"},{\"key\":\"stretch_length_min\",\"label\":\"Len"
-        "gth Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\"},{\"key\":\"stretch_length_max\",\"label\":\"Length"
-        " Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"key\":\"stretch_slice_min\",\"label\":\"Slice Mini"
-        "mum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\"stretch_slice_max\",\"label\":\"Slice Maximum\","
-        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stretch_pitch_min\",\"label\":\"Pitch Minimum\",\"type"
-        "\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_pitch_max\",\"label\":\"Pitch Maximum\",\"type\":\"i"
-        "nt\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"}]},\"master\":{\"name\":\"Master\",\"knobs\":[\"grain_fx\",\"grain_cycle_ms\""
-        ",\"A_vol\",\"B_vol\",\"quant\"],\"params\":[{\"key\":\"grain_cycle_ms\",\"label\":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":"
-        "120,\"short_name\":\"GrnCyc\"},{\"key\":\"grain_fx\",\"label\":\"Grain Effect\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name"
-        "\":\"Grn FX\"},{\"key\":\"A_vol\",\"label\":\"Sample A Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\"},{\"ke"
-        "y\":\"B_vol\",\"label\":\"Sample B Volume\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\"},{\"key\":\"quant\",\"labe"
-        "l\":\"Note Quantization\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\"}]}},\"params\":[{\"key\":\"A_s"
-        "ample_path\",\"type\":\"filepath\",\"root\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"A Sample"
-        "\",\"name\":\"Sample A\"},{\"key\":\"A_sample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4"
-        " bars\",\"8 bars\"],\"short_name\":\"A Length\",\"name\":\"Sample A Length\"},{\"key\":\"B_sample_path\",\"type\":\"filepath\",\"r"
-        "oot\":\"/data/UserData/breakbeat-samples\",\"filter\":\".wav\",\"short_name\":\"B Sample\",\"name\":\"Sample B\"},{\"key\":\"B_s"
-        "ample_length\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"B"
-        " Length\",\"name\":\"Sample B Length\"},{\"key\":\"B_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\",\"n"
-        "ame\":\"Sample B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Cmplx\",\"name\":\"Comple"
-        "xity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phra"
-        "se\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":\"status_view"
-        ".js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wave_a\",\"wave_"
-        "b\"],\"name\":\"Playback Status\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\",\"name\":\"Anc"
-        "hor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amount\"},{\"key\":\""
-        "fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\",\"type\":\"int\""
-        ",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"ma"
-        "x\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
-        "t_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ret"
-        "rig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"retrig_16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R16x\",\"name\":\""
-        "Retrigger 16x\"},{\"key\":\"retrig_32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\",\"name\":\"Retrigger 32x\"}"
-        ",{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":"
-        "\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"str"
-        "etch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch"
-        "_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice"
-        "_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\","
-        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type"
-        "\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\","
-        "\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":10"
-        "0,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A V"
-        "ol\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sampl"
-        "e B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantiz"
-        "ation\"}]}");
+        "b\"]},{\"level\":\"anchors\",\"label\":\"Anchors\"},{\"level\":\"slicing\",\"label\":\"Slicing\"},{\"level\":\"retrig\",\"label\":\"Re"
+        "trig\"},{\"level\":\"stretch\",\"label\":\"Stretch\"},{\"level\":\"master\",\"label\":\"Master\"},{\"level\":\"envelope\",\"label\":\""
+        "Envelope\"}]},\"anchors\":{\"name\":\"Anchors\",\"knobs\":[\"anchor_1\",\"anchor_2\",\"anchor_3\",\"anchor_4\",\"anchor_5\",\"anch"
+        "or_6\",\"anchor_7\",\"anchor_8\"],\"params\":[{\"key\":\"anchor_1\",\"label\":\"Slice 1 at Position 1\",\"type\":\"int\",\"min\":0,"
+        "\"max\":100,\"short_name\":\"Slice 1\"},{\"key\":\"anchor_2\",\"label\":\"Slice 2 at Position 2\",\"type\":\"int\",\"min\":0,\"max\""
+        ":100,\"short_name\":\"Slice 2\"},{\"key\":\"anchor_3\",\"label\":\"Slice 3 at Position 3\",\"type\":\"int\",\"min\":0,\"max\":100,"
+        "\"short_name\":\"Slice 3\"},{\"key\":\"anchor_4\",\"label\":\"Slice 4 at Position 4\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
+        "t_name\":\"Slice 4\"},{\"key\":\"anchor_5\",\"label\":\"Slice 5 at Position 5\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_nam"
+        "e\":\"Slice 5\"},{\"key\":\"anchor_6\",\"label\":\"Slice 6 at Position 6\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"S"
+        "lice 6\"},{\"key\":\"anchor_7\",\"label\":\"Slice 7 at Position 7\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice "
+        "7\"},{\"key\":\"anchor_8\",\"label\":\"Slice 8 at Position 8\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 8\"}]}"
+        ",\"slicing\":{\"name\":\"Slicing\",\"knobs\":[\"mode_a\",\"edit_a\",\"mode_b\",\"edit_b\",\"early_end\"],\"params\":[{\"key\":\"mode_"
+        "a\",\"label\":\"Break A Mode\",\"type\":\"enum\",\"options\":[\"Grid\",\"Manual\"],\"short_name\":\"A Mode\"},{\"key\":\"edit_a\",\"la"
+        "bel\":\"Edit Break A\",\"type\":\"canvas\",\"short_name\":\"Edit A\",\"canvas_script\":\"slice_editor.js\",\"show_value\":false"
+        ",\"show_footer\":false,\"fullscreen_live_ms\":100,\"extra_keys\":[\"edit_a\",\"wave_a\"]},{\"key\":\"mode_b\",\"label\":\"Break"
+        " B Mode\",\"type\":\"enum\",\"options\":[\"Grid\",\"Manual\"],\"short_name\":\"B Mode\"},{\"key\":\"edit_b\",\"label\":\"Edit Break "
+        "B\",\"type\":\"canvas\",\"short_name\":\"Edit B\",\"canvas_script\":\"slice_editor.js\",\"show_value\":false,\"show_footer\":fa"
+        "lse,\"fullscreen_live_ms\":100,\"extra_keys\":[\"edit_b\",\"wave_b\"]},{\"key\":\"early_end\",\"label\":\"Early End\",\"type\":\""
+        "enum\",\"options\":[\"Silence\",\"Reverse\"],\"short_name\":\"Early End\"}]},\"retrig\":{\"name\":\"Retrig\",\"knobs\":[\"retrig_2"
+        "x\",\"retrig_push\",\"retrig_drag\",\"retrig_3x\",\"retrig_4x\",\"retrig_8x\",\"retrig_16x\",\"retrig_32x\"],\"params\":[{\"key\""
+        ":\"retrig_2x\",\"label\":\"Retrigger 2x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\"},{\"key\":\"retrig_pu"
+        "sh\",\"label\":\"Push 2x (first two 4x hits)\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Push 2x\"},{\"key\":\"retri"
+        "g_drag\",\"label\":\"Drag 2x (dotted 16th repeat)\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Drag 2x\"},{\"key\":\""
+        "retrig_3x\",\"label\":\"Retrigger 3x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\"},{\"key\":\"retrig_4x\","
+        "\"label\":\"Retrigger 4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 4x\"},{\"key\":\"retrig_8x\",\"label\":\"Re"
+        "trigger 8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x\"},{\"key\":\"retrig_16x\",\"label\":\"Retrigger 16"
+        "x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R16x\"},{\"key\":\"retrig_32x\",\"label\":\"Retrigger 32x\",\"type\":\"int"
+        "\",\"min\":0,\"max\":100,\"short_name\":\"R32x\"}]},\"stretch\":{\"name\":\"Stretch\",\"knobs\":[\"stretch_chance\",\"stretch_leng"
+        "th_min\",\"stretch_length_max\",\"stretch_slice_min\",\"stretch_slice_max\",\"stretch_pitch_min\",\"stretch_pitch_max\"],"
+        "\"params\":[{\"key\":\"stretch_chance\",\"label\":\"Stretch Chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance"
+        "\"},{\"key\":\"stretch_length_min\",\"label\":\"Length Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\"},"
+        "{\"key\":\"stretch_length_max\",\"label\":\"Length Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\"},{\"k"
+        "ey\":\"stretch_slice_min\",\"label\":\"Slice Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\"},{\"key\":\""
+        "stretch_slice_max\",\"label\":\"Slice Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\"},{\"key\":\"stret"
+        "ch_pitch_min\",\"label\":\"Pitch Minimum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\"},{\"key\":\"stretch_p"
+        "itch_max\",\"label\":\"Pitch Maximum\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\"}]},\"master\":{\"name\":\"M"
+        "aster\",\"knobs\":[\"grain_fx\",\"grain_cycle_ms\",\"A_vol\",\"B_vol\",\"quant\"],\"params\":[{\"key\":\"grain_cycle_ms\",\"label\""
+        ":\"Grain Cycle\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\"},{\"key\":\"grain_fx\",\"label\":\"Grain Effect\""
+        ",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Grn FX\"},{\"key\":\"A_vol\",\"label\":\"Sample A Volume\",\"type\":\"int\",\""
+        "min\":0,\"max\":100,\"short_name\":\"A Vol\"},{\"key\":\"B_vol\",\"label\":\"Sample B Volume\",\"type\":\"int\",\"min\":0,\"max\":100"
+        ",\"short_name\":\"B Vol\"},{\"key\":\"quant\",\"label\":\"Note Quantization\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"sh"
+        "ort_name\":\"Quant\"}]},\"envelope\":{\"name\":\"Envelope\",\"knobs\":[\"attack_ms\",\"decay_ms\"],\"params\":[{\"key\":\"attack_m"
+        "s\",\"label\":\"Attack\",\"type\":\"int\",\"min\":0,\"max\":250,\"unit\":\"ms\",\"short_name\":\"Attack\"},{\"key\":\"decay_ms\",\"label"
+        "\":\"Decay\",\"type\":\"int\",\"min\":0,\"max\":250,\"unit\":\"ms\",\"short_name\":\"Decay\"}]}},\"params\":[{\"key\":\"B_sample_lengt"
+        "h\",\"type\":\"enum\",\"options\":[\"1/4 bar\",\"1/2 bar\",\"1 bar\",\"2 bars\",\"4 bars\",\"8 bars\"],\"short_name\":\"B Length\",\"n"
+        "ame\":\"Sample B Length\"},{\"key\":\"B_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Chance\",\"name\":\"Sampl"
+        "e B Chance\"},{\"key\":\"complexity\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Cmplx\",\"name\":\"Complexity\"},{\"ke"
+        "y\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short_name\":\"Phrase\",\"name\":"
+        "\"Phrase Length\"},{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch "
+        "Chance\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minim"
+        "um\"},{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"}"
+        ",{\"key\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key"
+        "\":\"stretch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"str"
+        "etch_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_"
+        "pitch_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_m"
+        "s\",\"type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\","
+        "\"min\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\""
+        "short_name\":\"A Vol\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vo"
+        "l\",\"name\":\"Sample B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"nam"
+        "e\":\"Note Quantization\"}]}");
 }
 
 static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
@@ -529,26 +559,41 @@ static void build_chain_params(const breakbeat_t *bb, char *out, int out_len) {
         "ame\":\"Complexity\"},{\"key\":\"phrase\",\"type\":\"enum\",\"options\":[\"Off\",\"2 bars\",\"4 bars\",\"8 bars\",\"16 bars\"],\"short"
         "_name\":\"Phrase\",\"name\":\"Phrase Length\"},{\"key\":\"status\",\"type\":\"canvas\",\"short_name\":\"Status\",\"canvas_script\":"
         "\"status_view.js\",\"show_value\":true,\"show_footer\":false,\"fullscreen_live_ms\":50,\"extra_keys\":[\"status_info\",\"wa"
-        "ve_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"anchor\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Anchor\""
-        ",\"name\":\"Anchor Strength\"},{\"key\":\"roll\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Roll\",\"name\":\"Roll Amoun"
-        "t\"},{\"key\":\"fill\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Fill\",\"name\":\"Fill Amount\"},{\"key\":\"retrig_2x\","
-        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_3x\",\"type\":\"int\""
-        ",\"min\":0,\"max\":100,\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"ma"
-        "x\":100,\"short_name\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
-        "t_name\":\"Retrig 8x\",\"name\":\"Retrigger 8x\"},{\"key\":\"retrig_16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R1"
-        "6x\",\"name\":\"Retrigger 16x\"},{\"key\":\"retrig_32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\",\"name\":\"Ret"
-        "rigger 32x\"},{\"key\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chan"
-        "ce\"},{\"key\":\"stretch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"}"
-        ",{\"key\":\"stretch_length_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"k"
-        "ey\":\"stretch_slice_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"s"
-        "tretch_slice_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch"
-        "_pitch_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitc"
-        "h_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\""
-        "type\":\"int\",\"min\":10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min"
-        "\":0,\"max\":100,\"short_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"shor"
-        "t_name\":\"A Vol\",\"name\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\""
-        "name\":\"Sample B Volume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\""
-        "Note Quantization\"}]");
+        "ve_a\",\"wave_b\"],\"name\":\"Playback Status\"},{\"key\":\"anchor_1\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice"
+        " 1\",\"name\":\"Slice 1 at Position 1\"},{\"key\":\"anchor_2\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 2\",\"n"
+        "ame\":\"Slice 2 at Position 2\"},{\"key\":\"anchor_3\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 3\",\"name\":\""
+        "Slice 3 at Position 3\"},{\"key\":\"anchor_4\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 4\",\"name\":\"Slice "
+        "4 at Position 4\"},{\"key\":\"anchor_5\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 5\",\"name\":\"Slice 5 at P"
+        "osition 5\"},{\"key\":\"anchor_6\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 6\",\"name\":\"Slice 6 at Positio"
+        "n 6\"},{\"key\":\"anchor_7\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 7\",\"name\":\"Slice 7 at Position 7\"},"
+        "{\"key\":\"anchor_8\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Slice 8\",\"name\":\"Slice 8 at Position 8\"},{\"key\""
+        ":\"mode_a\",\"type\":\"enum\",\"options\":[\"Grid\",\"Manual\"],\"short_name\":\"A Mode\",\"name\":\"Break A Mode\"},{\"key\":\"edit_"
+        "a\",\"type\":\"canvas\",\"short_name\":\"Edit A\",\"canvas_script\":\"slice_editor.js\",\"show_value\":false,\"show_footer\":fa"
+        "lse,\"fullscreen_live_ms\":100,\"extra_keys\":[\"edit_a\",\"wave_a\"],\"name\":\"Edit Break A\"},{\"key\":\"mode_b\",\"type\":\"e"
+        "num\",\"options\":[\"Grid\",\"Manual\"],\"short_name\":\"B Mode\",\"name\":\"Break B Mode\"},{\"key\":\"edit_b\",\"type\":\"canvas\","
+        "\"short_name\":\"Edit B\",\"canvas_script\":\"slice_editor.js\",\"show_value\":false,\"show_footer\":false,\"fullscreen_liv"
+        "e_ms\":100,\"extra_keys\":[\"edit_b\",\"wave_b\"],\"name\":\"Edit Break B\"},{\"key\":\"early_end\",\"type\":\"enum\",\"options\":["
+        "\"Silence\",\"Reverse\"],\"short_name\":\"Early End\",\"name\":\"Early End\"},{\"key\":\"retrig_2x\",\"type\":\"int\",\"min\":0,\"max"
+        "\":100,\"short_name\":\"Retrig 2x\",\"name\":\"Retrigger 2x\"},{\"key\":\"retrig_push\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
+        "rt_name\":\"Push 2x\",\"name\":\"Push 2x (first two 4x hits)\"},{\"key\":\"retrig_drag\",\"type\":\"int\",\"min\":0,\"max\":100,\""
+        "short_name\":\"Drag 2x\",\"name\":\"Drag 2x (dotted 16th repeat)\"},{\"key\":\"retrig_3x\",\"type\":\"int\",\"min\":0,\"max\":100"
+        ",\"short_name\":\"Retrig 3x\",\"name\":\"Retrigger 3x\"},{\"key\":\"retrig_4x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name"
+        "\":\"Retrig 4x\",\"name\":\"Retrigger 4x\"},{\"key\":\"retrig_8x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Retrig 8x"
+        "\",\"name\":\"Retrigger 8x\"},{\"key\":\"retrig_16x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R16x\",\"name\":\"Retrig"
+        "ger 16x\"},{\"key\":\"retrig_32x\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"R32x\",\"name\":\"Retrigger 32x\"},{\"key"
+        "\":\"stretch_chance\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Chance\",\"name\":\"Stretch Chance\"},{\"key\":\"stret"
+        "ch_length_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Min\",\"name\":\"Length Minimum\"},{\"key\":\"stretch_l"
+        "ength_max\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Ln Max\",\"name\":\"Length Maximum\"},{\"key\":\"stretch_slice"
+        "_min\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Min\",\"name\":\"Slice Minimum\"},{\"key\":\"stretch_slice_max\","
+        "\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"Sl Max\",\"name\":\"Slice Maximum\"},{\"key\":\"stretch_pitch_min\",\"type\""
+        ":\"int\",\"min\":0,\"max\":100,\"short_name\":\"PtchMin\",\"name\":\"Pitch Minimum\"},{\"key\":\"stretch_pitch_max\",\"type\":\"int"
+        "\",\"min\":0,\"max\":100,\"short_name\":\"PtchMax\",\"name\":\"Pitch Maximum\"},{\"key\":\"grain_cycle_ms\",\"type\":\"int\",\"min\":"
+        "10,\"max\":120,\"short_name\":\"GrnCyc\",\"name\":\"Grain Cycle\"},{\"key\":\"grain_fx\",\"type\":\"int\",\"min\":0,\"max\":100,\"sho"
+        "rt_name\":\"Grn FX\",\"name\":\"Grain Effect\"},{\"key\":\"A_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"A Vol\",\"n"
+        "ame\":\"Sample A Volume\"},{\"key\":\"B_vol\",\"type\":\"int\",\"min\":0,\"max\":100,\"short_name\":\"B Vol\",\"name\":\"Sample B Vo"
+        "lume\"},{\"key\":\"quant\",\"type\":\"enum\",\"options\":[\"8ths\",\"16ths\"],\"short_name\":\"Quant\",\"name\":\"Note Quantization\""
+        "},{\"key\":\"attack_ms\",\"type\":\"int\",\"min\":0,\"max\":250,\"unit\":\"ms\",\"short_name\":\"Attack\",\"name\":\"Attack\"},{\"key\":"
+        "\"decay_ms\",\"type\":\"int\",\"min\":0,\"max\":250,\"unit\":\"ms\",\"short_name\":\"Decay\",\"name\":\"Decay\"}]");
 }
 
 /* Create the filepath browser "portal" with symlinks to bundled samples and
@@ -621,6 +666,7 @@ static int open_wav(breakbeat_t *wp, const char *path, float expected_length) {
     uint16_t audio_format = 0;
     uint16_t num_channels = 0;
     uint16_t bits_per_sample = 0;
+    uint32_t wav_rate = MOVE_SAMPLE_RATE;
     int found_fmt = 0;
     int found_data = 0;
     uint32_t data_offset = 0;
@@ -629,10 +675,12 @@ static int open_wav(breakbeat_t *wp, const char *path, float expected_length) {
     while (offset + 8 <= map_size) {
         const uint8_t *chunk = raw + offset;
         uint32_t chunk_size = chunk[4] | (chunk[5] << 8) | (chunk[6] << 16) | (chunk[7] << 24);
+        if ((size_t)chunk_size > map_size - offset - 8) break;
 
         if (memcmp(chunk, "fmt ", 4) == 0 && chunk_size >= 16) {
             audio_format    = chunk[8]  | (chunk[9]  << 8);
             num_channels    = chunk[10] | (chunk[11] << 8);
+            wav_rate        = chunk[12] | (chunk[13] << 8) | (chunk[14] << 16) | (chunk[15] << 24);
             bits_per_sample = chunk[22] | (chunk[23] << 8);
             found_fmt = 1;
         } else if (memcmp(chunk, "data", 4) == 0) {
@@ -688,6 +736,7 @@ static int open_wav(breakbeat_t *wp, const char *path, float expected_length) {
     wp->num_channels = num_channels;
     wp->data = (void *)(raw + data_offset);
     wp->total_frames = data_size / (num_channels * bytes_per_sample);
+    wp->sample_rate = wav_rate;
     wp->play_pos = 0;
     /* Scale samples_per_trigger proportionally when active_length changes so the
      * playback rate is correct immediately on the first block of the new sample,
@@ -701,11 +750,9 @@ static int open_wav(breakbeat_t *wp, const char *path, float expected_length) {
     }
     wp->active_length = expected_length;
 
-    uint32_t slice_size = wp->total_frames / 8;
-    for (int i = 0; i < 8; i++) {
-        wp->slice_starts[i] = i * slice_size;
-        wp->slice_lengths[i] = slice_size;
-    }
+    bb_place_slices(wp->total_frames, wp->load_slice_mode,
+                    wp->load_slice_positions, wp->slice_starts,
+                    wp->slice_lengths);
     bb_build_waveform(wp);
 
     char logbuf[160];
@@ -726,6 +773,7 @@ static void move_active_sample_to_slot(breakbeat_t *src, bb_sample_slot_t *dst,
     dst->map_size = src->map_size;
     dst->data = src->data;
     dst->total_frames = src->total_frames;
+    dst->sample_rate = src->sample_rate;
     dst->num_channels = src->num_channels;
     dst->audio_format = src->audio_format;
     dst->bits_per_sample = src->bits_per_sample;
@@ -755,11 +803,15 @@ static void install_loaded_sample(breakbeat_t *bb, char loop,
         bb->map_size = loaded->map_size;
         bb->data = loaded->data;
         bb->total_frames = loaded->total_frames;
+        bb->sample_rate = loaded->sample_rate;
         bb->num_channels = loaded->num_channels;
         bb->audio_format = loaded->audio_format;
         bb->bits_per_sample = loaded->bits_per_sample;
         memcpy(bb->slice_starts, loaded->slice_starts, sizeof(bb->slice_starts));
         memcpy(bb->slice_lengths, loaded->slice_lengths, sizeof(bb->slice_lengths));
+        bb_place_slices(bb->total_frames, bb->slice_modes[loop == 'B'],
+                        bb->slice_positions[loop == 'B'], bb->slice_starts,
+                        bb->slice_lengths);
         memcpy(bb->waveform, loaded->waveform, sizeof(bb->waveform));
         bb->active_length = loaded->musical_length;
         bb->ticks_per_trigger = (int)(12.0f * bb->active_length + 0.5f);
@@ -788,6 +840,11 @@ static void install_loaded_sample(breakbeat_t *bb, char loop,
     } else if (bb->standby_loop == loop) {
         close_sample_slot(&bb->standby_sample);
         bb->standby_sample = *loaded;
+        bb_place_slices(bb->standby_sample.total_frames,
+                        bb->slice_modes[loop == 'B'],
+                        bb->slice_positions[loop == 'B'],
+                        bb->standby_sample.slice_starts,
+                        bb->standby_sample.slice_lengths);
         loaded->fd = -1;
         loaded->map = NULL;
         loaded->data = NULL;
@@ -839,6 +896,9 @@ static void *sample_loader_main(void *arg) {
             memset(&tmp, 0, sizeof(tmp));
             tmp.fd = -1;
             tmp.ticks_per_trigger = 12;
+            tmp.load_slice_mode = bb->slice_modes[which];
+            memcpy(tmp.load_slice_positions, bb->slice_positions[which],
+                   sizeof(tmp.load_slice_positions));
             if (open_wav(&tmp, path, length) == 0) {
                 bb_sample_slot_t loaded;
                 move_active_sample_to_slot(&tmp, &loaded, length);
@@ -907,6 +967,10 @@ static int load_standby_sample(breakbeat_t *bb, const char *path, float expected
     memset(&tmp, 0, sizeof(tmp));
     tmp.fd = -1;
     tmp.ticks_per_trigger = 12;
+    int which = 1;
+    tmp.load_slice_mode = bb->slice_modes[which];
+    memcpy(tmp.load_slice_positions, bb->slice_positions[which],
+           sizeof(tmp.load_slice_positions));
     if (open_wav(&tmp, resolved, expected_length) != 0) return -1;
 
     close_sample_slot(&bb->standby_sample);
@@ -915,6 +979,7 @@ static int load_standby_sample(breakbeat_t *bb, const char *path, float expected
     bb->standby_sample.map_size = tmp.map_size;
     bb->standby_sample.data = tmp.data;
     bb->standby_sample.total_frames = tmp.total_frames;
+    bb->standby_sample.sample_rate = tmp.sample_rate;
     bb->standby_sample.num_channels = tmp.num_channels;
     bb->standby_sample.audio_format = tmp.audio_format;
     bb->standby_sample.bits_per_sample = tmp.bits_per_sample;
@@ -940,6 +1005,7 @@ static int activate_standby_sample(breakbeat_t *bb) {
     size_t old_map_size = bb->map_size;
     void *old_data = bb->data;
     uint32_t old_total_frames = bb->total_frames;
+    uint32_t old_sample_rate = bb->sample_rate;
     int old_channels = bb->num_channels;
     int old_format = bb->audio_format;
     int old_bits = bb->bits_per_sample;
@@ -953,6 +1019,7 @@ static int activate_standby_sample(breakbeat_t *bb) {
     bb->map_size = s->map_size;
     bb->data = s->data;
     bb->total_frames = s->total_frames;
+    bb->sample_rate = s->sample_rate;
     bb->num_channels = s->num_channels;
     bb->audio_format = s->audio_format;
     bb->bits_per_sample = s->bits_per_sample;
@@ -965,6 +1032,7 @@ static int activate_standby_sample(breakbeat_t *bb) {
     s->map_size = old_map_size;
     s->data = old_data;
     s->total_frames = old_total_frames;
+    s->sample_rate = old_sample_rate;
     s->num_channels = old_channels;
     s->audio_format = old_format;
     s->bits_per_sample = old_bits;
@@ -1024,6 +1092,9 @@ static int apply_sample_path(breakbeat_t *bb, const char *path, float expected_l
     atomic_store_explicit(&bb->sample_update, 1, memory_order_release);
     while (atomic_load_explicit(&bb->sample_readers, memory_order_acquire) > 0)
         sched_yield();
+    bb->load_slice_mode = bb->slice_modes[0];
+    memcpy(bb->load_slice_positions, bb->slice_positions[0],
+           sizeof(bb->load_slice_positions));
     int result = open_wav(bb, resolved, expected_length);
     atomic_store_explicit(&bb->sample_update, 0, memory_order_release);
     return result;
@@ -1036,6 +1107,15 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
     char str_val[256];
     float fval;
     int ival;
+
+    memset(bb->anchors, 0, sizeof(bb->anchors));
+    bb->attack_ms = bb->decay_ms = 0;
+    bb->early_end = 0;
+    for (int loop = 0; loop < 2; loop++) {
+        bb->slice_modes[loop] = 0;
+        for (int slice = 0; slice < 8; slice++)
+            bb->slice_positions[loop][slice] = (uint32_t)slice * BB_SLICE_UNITS / 8u;
+    }
 
     bb->pitch_lock = 0;
     bb->grain_fx = 0;
@@ -1123,9 +1203,33 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
     }
 
     if (json_get_float(json, "complexity", &fval)) bb->complexity = fval / 100.0f;
-    if (json_get_float(json, "anchor",     &fval)) bb->anchor     = fval / 100.0f;
+    if (json_get_float(json, "anchor",     &fval)) {
+        bb->anchor = fval / 100.0f;
+        bb->anchors[0] = bb->anchors[4] = (float)bb_clamp_percent((int)fval) / 100.0f;
+    }
     if (json_get_float(json, "roll",       &fval)) bb->roll       = fval / 100.0f;
     if (json_get_float(json, "fill",       &fval)) bb->fill       = fval / 100.0f;
+    for (int k = 0; k < 8; k++) {
+        char anchor_key[16];
+        snprintf(anchor_key, sizeof(anchor_key), "anchor_%d", k + 1);
+        if (json_get_float(json, anchor_key, &fval))
+            bb->anchors[k] = (float)bb_clamp_percent((int)fval) / 100.0f;
+    }
+    if (json_get_int(json, "attack_ms", &ival))
+        bb->attack_ms = ival < 0 ? 0 : (ival > 250 ? 250 : ival);
+    if (json_get_int(json, "decay_ms", &ival))
+        bb->decay_ms = ival < 0 ? 0 : (ival > 250 ? 250 : ival);
+    if (json_get_int(json, "early_end", &ival)) bb->early_end = ival == 1;
+    for (int loop = 0; loop < 2; loop++) {
+        char key[24];
+        snprintf(key, sizeof(key), "mode_%c", loop ? 'b' : 'a');
+        if (json_get_int(json, key, &ival)) bb->slice_modes[loop] = ival == 1;
+        for (int slice = 0; slice < 8; slice++) {
+            snprintf(key, sizeof(key), "slice_%c_%d", loop ? 'b' : 'a', slice + 1);
+            if (json_get_int(json, key, &ival) && ival >= 0 && ival <= (int)BB_SLICE_UNITS)
+                bb->slice_positions[loop][slice] = (uint32_t)ival;
+        }
+    }
     bb->loop_gain[0] = bb->loop_gain[1] = 1.0f;
     bb->note_quant_ticks = 12;
     if (json_get_int(json, "A_vol", &ival)) bb->loop_gain[0] = (float)bb_clamp_percent(ival) / 100.0f;
@@ -1152,6 +1256,8 @@ static void apply_preset_json(breakbeat_t *bb, const char *json) {
         if (json_get_float(json, "retrig_8x", &fval)) { bb->retrig_p[3] = fval / 100.0f; has_new = 1; }
         if (json_get_float(json, "retrig_16x", &fval)) { bb->retrig_p[4] = fval / 100.0f; has_new = 1; }
         if (json_get_float(json, "retrig_32x", &fval)) { bb->retrig_p[5] = fval / 100.0f; has_new = 1; }
+        if (json_get_float(json, "retrig_push", &fval)) { bb->retrig_p[6] = fval / 100.0f; has_new = 1; }
+        if (json_get_float(json, "retrig_drag", &fval)) { bb->retrig_p[7] = fval / 100.0f; has_new = 1; }
         /* Backward-compat: old retrigger + retrigger_rate → new per-rate. */
         if (!has_new) {
             float prob = 0.0f;
@@ -1495,6 +1601,30 @@ static void bb_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     }
 }
 
+static void bb_refresh_manual_slices(breakbeat_t *bb, int which) {
+    char loop = which ? 'B' : 'A';
+    atomic_store_explicit(&bb->sample_update, 1, memory_order_release);
+    while (atomic_load_explicit(&bb->sample_readers, memory_order_acquire) > 0)
+        sched_yield();
+    if (bb->current_loop == loop && bb->total_frames)
+        bb_place_slices(bb->total_frames, bb->slice_modes[which],
+                        bb->slice_positions[which], bb->slice_starts,
+                        bb->slice_lengths);
+    if (bb->standby_loop == loop && bb->standby_sample.total_frames)
+        bb_place_slices(bb->standby_sample.total_frames, bb->slice_modes[which],
+                        bb->slice_positions[which], bb->standby_sample.slice_starts,
+                        bb->standby_sample.slice_lengths);
+    atomic_store_explicit(&bb->sample_update, 0, memory_order_release);
+}
+
+static int bb_parse_slice_key(const char *key, int *which, int *slice) {
+    if (strncmp(key, "slice_", 6) || (key[6] != 'a' && key[6] != 'b') ||
+        key[7] != '_' || key[8] < '1' || key[8] > '8' || key[9]) return 0;
+    *which = key[6] == 'b';
+    *slice = key[8] - '1';
+    return 1;
+}
+
 static void bb_set_param(void *instance, const char *key, const char *val) {
     breakbeat_t *bb = (breakbeat_t *)instance;
     if (!bb || !key || !val) return;
@@ -1564,6 +1694,36 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
                  load_standby_sample(bb, bb->alt_sample_path, bb->alt_length) == 0)
             bb->standby_loop = 'B';
     }
+    else if (strcmp(key, "mode_a") == 0 || strcmp(key, "mode_b") == 0) {
+        int which = key[5] == 'b';
+        bb->slice_modes[which] = (strcmp(val, "Manual") == 0 || atoi(val) == 1);
+        bb_refresh_manual_slices(bb, which);
+    }
+    else if (strcmp(key, "early_end") == 0) {
+        bb->early_end = (strcmp(val, "Reverse") == 0 || atoi(val) == 1);
+    }
+    else if (strcmp(key, "reset_a") == 0 || strcmp(key, "reset_b") == 0) {
+        int which = key[6] == 'b';
+        for (int i = 0; i < 8; i++)
+            bb->slice_positions[which][i] = (uint32_t)i * BB_SLICE_UNITS / 8u;
+        bb->slice_modes[which] = 1;
+        bb_refresh_manual_slices(bb, which);
+    }
+    else if ((key[0] == 's') && (key[1] == 'l')) {
+        int which, slice;
+        if (!bb_parse_slice_key(key, &which, &slice)) return;
+        int value = atoi(val);
+        if (value < 0) value = 0;
+        if (value > (int)BB_SLICE_UNITS) value = BB_SLICE_UNITS;
+        uint32_t lower = slice ? bb->slice_positions[which][slice - 1] + 1u : 0u;
+        uint32_t upper = slice < 7 ? bb->slice_positions[which][slice + 1] - 1u
+                                   : BB_SLICE_UNITS;
+        if ((uint32_t)value < lower) value = (int)lower;
+        if ((uint32_t)value > upper) value = (int)upper;
+        bb->slice_positions[which][slice] = (uint32_t)value;
+        bb->slice_modes[which] = 1;
+        bb_refresh_manual_slices(bb, which);
+    }
     else if (strcmp(key, "A_sample_length") == 0 || strcmp(key, "length") == 0) {
         int idx = atoi(val);
         float lengths[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
@@ -1585,6 +1745,19 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         bb->complexity = atof(val) / 100.0f;
         if (bb->complexity < 0.0f) bb->complexity = 0.0f;
         if (bb->complexity > 1.0f) bb->complexity = 1.0f;
+    }
+    else if (strncmp(key, "anchor_", 7) == 0 && key[7] >= '1' && key[7] <= '8' && key[8] == '\0') {
+        bb->anchors[key[7] - '1'] = (float)bb_clamp_percent(atoi(val)) / 100.0f;
+    }
+    else if (strcmp(key, "attack_ms") == 0) {
+        bb->attack_ms = atoi(val);
+        if (bb->attack_ms < 0) bb->attack_ms = 0;
+        if (bb->attack_ms > 250) bb->attack_ms = 250;
+    }
+    else if (strcmp(key, "decay_ms") == 0) {
+        bb->decay_ms = atoi(val);
+        if (bb->decay_ms < 0) bb->decay_ms = 0;
+        if (bb->decay_ms > 250) bb->decay_ms = 250;
     }
     else if (strcmp(key, "A_vol") == 0 || strcmp(key, "B_vol") == 0) {
         bb->loop_gain[key[0] == 'B'] = (float)bb_clamp_percent(atoi(val)) / 100.0f;
@@ -1677,6 +1850,12 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (bb->retrig_p[index] < 0.0f) bb->retrig_p[index] = 0.0f;
         if (bb->retrig_p[index] > 1.0f) bb->retrig_p[index] = 1.0f;
     }
+    else if (strcmp(key, "retrig_push") == 0 || strcmp(key, "retrig_drag") == 0) {
+        int index = strcmp(key, "retrig_push") == 0 ? 6 : 7;
+        bb->retrig_p[index] = atof(val) / 100.0f;
+        if (bb->retrig_p[index] < 0.0f) bb->retrig_p[index] = 0.0f;
+        if (bb->retrig_p[index] > 1.0f) bb->retrig_p[index] = 1.0f;
+    }
     else if (strcmp(key, "B_chance") == 0) {
         bb->swap_prob = atof(val) / 100.0f;
         if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
@@ -1749,12 +1928,27 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
                 fprintf(f, "  \"anchor\": %d,\n", (int)(bb->anchor * 100.0f));
                 fprintf(f, "  \"roll\": %d,\n", (int)(bb->roll * 100.0f));
                 fprintf(f, "  \"fill\": %d,\n", (int)(bb->fill * 100.0f));
+                for (int k = 0; k < 8; k++)
+                    fprintf(f, "  \"anchor_%d\": %d,\n", k + 1,
+                            (int)(bb->anchors[k] * 100.0f + 0.5f));
+                fprintf(f, "  \"attack_ms\": %d,\n", bb->attack_ms);
+                fprintf(f, "  \"decay_ms\": %d,\n", bb->decay_ms);
+                fprintf(f, "  \"early_end\": %d,\n", bb->early_end);
+                fprintf(f, "  \"mode_a\": %d,\n  \"mode_b\": %d,\n",
+                        bb->slice_modes[0], bb->slice_modes[1]);
+                for (int loop = 0; loop < 2; loop++)
+                    for (int slice = 0; slice < 8; slice++)
+                        fprintf(f, "  \"slice_%c_%d\": %u,\n",
+                                loop ? 'b' : 'a', slice + 1,
+                                bb->slice_positions[loop][slice]);
                 fprintf(f, "  \"retrig_2x\": %d,\n", (int)(bb->retrig_p[0] * 100.0f));
                 fprintf(f, "  \"retrig_3x\": %d,\n", (int)(bb->retrig_p[1] * 100.0f));
                 fprintf(f, "  \"retrig_4x\": %d,\n", (int)(bb->retrig_p[2] * 100.0f));
                 fprintf(f, "  \"retrig_8x\": %d,\n", (int)(bb->retrig_p[3] * 100.0f));
                 fprintf(f, "  \"retrig_16x\": %d,\n", (int)(bb->retrig_p[4] * 100.0f));
-                fprintf(f, "  \"retrig_32x\": %d\n",  (int)(bb->retrig_p[5] * 100.0f));
+                fprintf(f, "  \"retrig_32x\": %d,\n", (int)(bb->retrig_p[5] * 100.0f));
+                fprintf(f, "  \"retrig_push\": %d,\n", (int)(bb->retrig_p[6] * 100.0f));
+                fprintf(f, "  \"retrig_drag\": %d\n", (int)(bb->retrig_p[7] * 100.0f));
                 fprintf(f, "}\n");
                 fclose(f);
                 
@@ -1771,6 +1965,8 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         /* State restore is not a user audition. The chain host applies the
          * preset immediately before state, so cancel any preview it started. */
         bb->preview_frames = 0;
+        memset(bb->anchors, 0, sizeof(bb->anchors));
+        bb->attack_ms = bb->decay_ms = 0;
         atomic_store_explicit(&bb->restore_pending_mask, 3u,
                               memory_order_release);
         if (!json_get_int(val, "preset_index", &bb->preset_idx))
@@ -1811,6 +2007,18 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             bb->complexity = (float)i / 100.0f;
             if (bb->complexity < 0.0f) bb->complexity = 0.0f;
             if (bb->complexity > 1.0f) bb->complexity = 1.0f;
+        }
+        bb->early_end = 0;
+        if (json_get_int(val, "early_end", &i)) bb->early_end = i == 1;
+        for (int loop = 0; loop < 2; loop++) {
+            char field[24];
+            snprintf(field, sizeof(field), "mode_%c", loop ? 'b' : 'a');
+            if (json_get_int(val, field, &i)) bb->slice_modes[loop] = i == 1;
+            for (int slice = 0; slice < 8; slice++) {
+                snprintf(field, sizeof(field), "slice_%c_%d", loop ? 'b' : 'a', slice + 1);
+                if (json_get_int(val, field, &i) && i >= 0 && i <= (int)BB_SLICE_UNITS)
+                    bb->slice_positions[loop][slice] = (uint32_t)i;
+            }
         }
         if (json_get_int(val, "pitch_lock", &i)) bb->pitch_lock = (i != 0);
         if (json_get_int(val, "grain_fx", &i)) {
@@ -1865,6 +2073,20 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
             bb->anchor = (float)i / 100.0f;
             if (bb->anchor < 0.0f) bb->anchor = 0.0f;
             if (bb->anchor > 1.0f) bb->anchor = 1.0f;
+            /* Legacy Anchor protected the kick/snare positions. */
+            bb->anchors[0] = bb->anchors[4] = bb->anchor;
+        }
+        for (int k = 0; k < 8; k++) {
+            char anchor_key[16];
+            snprintf(anchor_key, sizeof(anchor_key), "anchor_%d", k + 1);
+            if (json_get_int(val, anchor_key, &i))
+                bb->anchors[k] = (float)bb_clamp_percent(i) / 100.0f;
+        }
+        if (json_get_int(val, "attack_ms", &i)) {
+            bb->attack_ms = i < 0 ? 0 : (i > 250 ? 250 : i);
+        }
+        if (json_get_int(val, "decay_ms", &i)) {
+            bb->decay_ms = i < 0 ? 0 : (i > 250 ? 250 : i);
         }
         if (json_get_int(val, "roll", &i)) {
             bb->roll = (float)i / 100.0f;
@@ -1886,9 +2108,11 @@ static void bb_set_param(void *instance, const char *key, const char *val) {
         if (json_get_int(val, "retrig_3x", &i)) bb->retrig_p[1] = (float)i / 100.0f;
         if (json_get_int(val, "retrig_4x", &i)) bb->retrig_p[2] = (float)i / 100.0f;
         if (json_get_int(val, "retrig_8x", &i)) bb->retrig_p[3] = (float)i / 100.0f;
-        bb->retrig_p[4] = bb->retrig_p[5] = 0.0f; /* pre-0.4.31 Set state */
+        for (int rate = 4; rate < BB_RETRIG_COUNT; rate++) bb->retrig_p[rate] = 0.0f; /* older Set states */
         if (json_get_int(val, "retrig_16x", &i)) bb->retrig_p[4] = (float)i / 100.0f;
         if (json_get_int(val, "retrig_32x", &i)) bb->retrig_p[5] = (float)i / 100.0f;
+        if (json_get_int(val, "retrig_push", &i)) bb->retrig_p[6] = (float)i / 100.0f;
+        if (json_get_int(val, "retrig_drag", &i)) bb->retrig_p[7] = (float)i / 100.0f;
         if (json_get_int(val, "swap_prob", &i)) {
             bb->swap_prob = (float)i / 100.0f;
             if (bb->swap_prob < 0.0f) bb->swap_prob = 0.0f;
@@ -1965,6 +2189,7 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
         unsigned kind = (word >> 4) & 3u;
         unsigned factor = (word >> 6) & 63u;
+        unsigned variant = (word >> 22) & 3u;
         if (kind == 0u)
             return snprintf(buf, buf_len, "%c%u", (word & 1u) ? 'B' : 'A',
                             (word >> 1) & 7u);
@@ -1974,19 +2199,20 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             return snprintf(buf, buf_len, "%c%uR", (word & 1u) ? 'B' : 'A',
                             (word >> 1) & 7u);
         return snprintf(buf, buf_len, "%c%u%c%u", (word & 1u) ? 'B' : 'A',
-                        (word >> 1) & 7u, kind == 2u ? 'S' : 'R', factor);
+                        (word >> 1) & 7u, bb_status_effect(kind, variant), factor);
     }
     else if (strcmp(key, "status_info") == 0) {
         unsigned word = atomic_load_explicit(&bb->status_word, memory_order_relaxed);
         unsigned kind = (word >> 4) & 3u;
         unsigned factor = (word >> 6) & 63u;
+        unsigned variant = (word >> 22) & 3u;
         char compact[8];
         if (kind == 0u)
             snprintf(compact, sizeof(compact), "%c%u", (word & 1u) ? 'B' : 'A',
                      (word >> 1) & 7u);
         else
             snprintf(compact, sizeof(compact), "%c%u%c%u", (word & 1u) ? 'B' : 'A',
-                     (word >> 1) & 7u, kind == 2u ? 'S' : 'R', factor);
+                     (word >> 1) & 7u, bb_status_effect(kind, variant), factor);
         return snprintf(buf, buf_len, "%s,%u,%u,%d", compact,
                         kind == 2u ? (word >> 12) & 31u : 0u,
                         kind == 2u ? factor : 0u,
@@ -1997,6 +2223,64 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         const char *wave = bb->current_loop == wanted ? bb->waveform
                          : (bb->standby_loop == wanted ? bb->standby_sample.waveform : "");
         return snprintf(buf, buf_len, "%s", wave);
+    }
+    else if (strcmp(key, "edit_a") == 0 || strcmp(key, "edit_b") == 0) {
+        int which = key[5] == 'b';
+        char loop = which ? 'B' : 'A';
+        uint32_t frames = bb->current_loop == loop ? bb->total_frames
+                        : (bb->standby_loop == loop ? bb->standby_sample.total_frames : 0u);
+        uint32_t rate = bb->current_loop == loop ? bb->sample_rate
+                      : (bb->standby_loop == loop ? bb->standby_sample.sample_rate : 0u);
+        const uint32_t *p = bb->slice_positions[which];
+        return snprintf(buf, buf_len, "%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+                        bb->slice_modes[which], frames, rate,
+                        p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+    }
+    else if (strncmp(key, "zoom_", 5) == 0 &&
+             (key[5] == 'a' || key[5] == 'b') && key[6] == '_' &&
+             key[7] >= '1' && key[7] <= '8' && key[8] == '\0') {
+        int which = key[5] == 'b';
+        int slice = key[7] - '1';
+        char loop = which ? 'B' : 'A';
+        const bb_sample_slot_t *slot = bb->standby_loop == loop ? &bb->standby_sample : NULL;
+        const void *data = bb->current_loop == loop ? bb->data : (slot ? slot->data : NULL);
+        uint32_t frames = bb->current_loop == loop ? bb->total_frames : (slot ? slot->total_frames : 0u);
+        uint32_t rate = bb->current_loop == loop ? bb->sample_rate : (slot ? slot->sample_rate : 0u);
+        int channels = bb->current_loop == loop ? bb->num_channels : (slot ? slot->num_channels : 0);
+        int format = bb->current_loop == loop ? bb->audio_format : (slot ? slot->audio_format : 0);
+        int bits = bb->current_loop == loop ? bb->bits_per_sample : (slot ? slot->bits_per_sample : 0);
+        if (!data || !frames || !rate) {
+            if (buf_len) buf[0] = '\0';
+            return 0;
+        }
+        uint32_t source_position = bb->slice_modes[which]
+                                 ? bb->slice_positions[which][slice]
+                                 : (uint32_t)slice * BB_SLICE_UNITS / 8u;
+        uint32_t center = (uint32_t)((uint64_t)frames * source_position / BB_SLICE_UNITS);
+        uint32_t half = rate / 25u; /* 80 ms across the full zoom screen */
+        if (!half) half = 1;
+        int64_t first = (int64_t)center - (int64_t)half;
+        int64_t last = (int64_t)center + (int64_t)half;
+        char peaks[129];
+        static const char hex[] = "0123456789abcdef";
+        for (int bin = 0; bin < 128; bin++) {
+            int64_t begin = first + (last - first) * bin / 128;
+            int64_t end = first + (last - first) * (bin + 1) / 128;
+            float peak = 0.0f;
+            for (int64_t frame = begin; frame < end; frame++) {
+                if (frame < 0 || frame >= (int64_t)frames) continue;
+                float left, right;
+                bb_read_sample_frame(data, channels, format, bits,
+                                     (uint32_t)frame, &left, &right);
+                float level = fmaxf(fabsf(left), fabsf(right));
+                if (level > peak) peak = level;
+            }
+            int scaled = (int)(peak * 15.0f + 0.5f);
+            peaks[bin] = hex[scaled < 0 ? 0 : (scaled > 15 ? 15 : scaled)];
+        }
+        peaks[128] = '\0';
+        return snprintf(buf, buf_len, "%lld,%lld,%s",
+                        (long long)first, (long long)last, peaks);
     }
     else if (strcmp(key, "stretch_info") == 0) {
         return snprintf(buf, buf_len, "L%d S%d P%d", bb->stretch_length,
@@ -2030,6 +2314,26 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
     }
     else if (strcmp(key, "complexity") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->complexity * 100.0f));
+    }
+    else if (strcmp(key, "mode_a") == 0 || strcmp(key, "mode_b") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->slice_modes[key[5] == 'b']);
+    }
+    else if (strcmp(key, "early_end") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->early_end);
+    }
+    else if (strncmp(key, "slice_", 6) == 0) {
+        int which, slice;
+        if (bb_parse_slice_key(key, &which, &slice))
+            return snprintf(buf, buf_len, "%u", bb->slice_positions[which][slice]);
+    }
+    else if (strncmp(key, "anchor_", 7) == 0 && key[7] >= '1' && key[7] <= '8' && key[8] == '\0') {
+        return snprintf(buf, buf_len, "%d", (int)(bb->anchors[key[7] - '1'] * 100.0f + 0.5f));
+    }
+    else if (strcmp(key, "attack_ms") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->attack_ms);
+    }
+    else if (strcmp(key, "decay_ms") == 0) {
+        return snprintf(buf, buf_len, "%d", bb->decay_ms);
     }
     else if (strcmp(key, "pitch_lock") == 0) {
         return snprintf(buf, buf_len, "%d", bb->pitch_lock);
@@ -2086,6 +2390,10 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         int index = strcmp(key, "retrig_16x") == 0 ? 4 : 5;
         return snprintf(buf, buf_len, "%d", (int)(bb->retrig_p[index] * 100.0f));
     }
+    else if (strcmp(key, "retrig_push") == 0 || strcmp(key, "retrig_drag") == 0) {
+        int index = strcmp(key, "retrig_push") == 0 ? 6 : 7;
+        return snprintf(buf, buf_len, "%d", (int)(bb->retrig_p[index] * 100.0f));
+    }
     else if (strcmp(key, "B_chance") == 0) {
         return snprintf(buf, buf_len, "%d", (int)(bb->swap_prob * 100.0f));
     }
@@ -2124,9 +2432,13 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len,
             "{\"preset_index\":%d,\"sample_path\":\"%s\",\"alt_sample_path\":\"%s\","
             "\"length\":%d,\"alt_length\":%d,\"complexity\":%d,\"anchor\":%d,\"roll\":%d,\"phrase\":%d,\"fill\":%d,"
-            "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"retrig_16x\":%d,\"retrig_32x\":%d,\"swap_prob\":%d,"
+            "\"retrig_2x\":%d,\"retrig_3x\":%d,\"retrig_4x\":%d,\"retrig_8x\":%d,\"retrig_16x\":%d,\"retrig_32x\":%d,\"retrig_push\":%d,\"retrig_drag\":%d,\"swap_prob\":%d,"
             "\"pitch_lock\":%d,\"grain_fx\":%d,\"grain_cycle_ms\":%d,\"A_vol\":%d,\"B_vol\":%d,\"quant\":%d,"
-            "\"stretch_chance\":%d,\"stretch_length_min\":%d,\"stretch_length_max\":%d,\"stretch_slice_min\":%d,\"stretch_slice_max\":%d,\"stretch_pitch_min\":%d,\"stretch_pitch_max\":%d}",
+            "\"stretch_chance\":%d,\"stretch_length_min\":%d,\"stretch_length_max\":%d,\"stretch_slice_min\":%d,\"stretch_slice_max\":%d,\"stretch_pitch_min\":%d,\"stretch_pitch_max\":%d,"
+            "\"anchor_1\":%d,\"anchor_2\":%d,\"anchor_3\":%d,\"anchor_4\":%d,\"anchor_5\":%d,\"anchor_6\":%d,\"anchor_7\":%d,\"anchor_8\":%d,\"attack_ms\":%d,\"decay_ms\":%d,"
+            "\"mode_a\":%d,\"mode_b\":%d,\"early_end\":%d,"
+            "\"slice_a_1\":%u,\"slice_a_2\":%u,\"slice_a_3\":%u,\"slice_a_4\":%u,\"slice_a_5\":%u,\"slice_a_6\":%u,\"slice_a_7\":%u,\"slice_a_8\":%u,"
+            "\"slice_b_1\":%u,\"slice_b_2\":%u,\"slice_b_3\":%u,\"slice_b_4\":%u,\"slice_b_5\":%u,\"slice_b_6\":%u,\"slice_b_7\":%u,\"slice_b_8\":%u}",
             bb->preset_idx,
             bb->main_sample_path, bb->alt_sample_path,
             len_idx, alt_len_idx,
@@ -2135,11 +2447,26 @@ static int bb_get_param(void *instance, const char *key, char *buf, int buf_len)
             (int)(bb->retrig_p[0] * 100.0f), (int)(bb->retrig_p[1] * 100.0f),
             (int)(bb->retrig_p[2] * 100.0f), (int)(bb->retrig_p[3] * 100.0f),
             (int)(bb->retrig_p[4] * 100.0f), (int)(bb->retrig_p[5] * 100.0f),
+            (int)(bb->retrig_p[6] * 100.0f), (int)(bb->retrig_p[7] * 100.0f),
             (int)(bb->swap_prob * 100.0f),
             bb->pitch_lock, bb->grain_fx, bb->grain_cycle_ms,
             (int)(bb->loop_gain[0] * 100.0f + 0.5f), (int)(bb->loop_gain[1] * 100.0f + 0.5f), bb->note_quant_ticks == 6,
             (int)(bb->stretch_chance * 100.0f),
-            bb->stretch_length_min, bb->stretch_length_max, bb->stretch_slice_min, bb->stretch_slice_max, bb->stretch_pitch_min, bb->stretch_pitch_max);
+            bb->stretch_length_min, bb->stretch_length_max, bb->stretch_slice_min, bb->stretch_slice_max, bb->stretch_pitch_min, bb->stretch_pitch_max,
+            (int)(bb->anchors[0] * 100.0f + 0.5f), (int)(bb->anchors[1] * 100.0f + 0.5f),
+            (int)(bb->anchors[2] * 100.0f + 0.5f), (int)(bb->anchors[3] * 100.0f + 0.5f),
+            (int)(bb->anchors[4] * 100.0f + 0.5f), (int)(bb->anchors[5] * 100.0f + 0.5f),
+            (int)(bb->anchors[6] * 100.0f + 0.5f), (int)(bb->anchors[7] * 100.0f + 0.5f),
+            bb->attack_ms, bb->decay_ms, bb->slice_modes[0], bb->slice_modes[1],
+            bb->early_end,
+            bb->slice_positions[0][0], bb->slice_positions[0][1],
+            bb->slice_positions[0][2], bb->slice_positions[0][3],
+            bb->slice_positions[0][4], bb->slice_positions[0][5],
+            bb->slice_positions[0][6], bb->slice_positions[0][7],
+            bb->slice_positions[1][0], bb->slice_positions[1][1],
+            bb->slice_positions[1][2], bb->slice_positions[1][3],
+            bb->slice_positions[1][4], bb->slice_positions[1][5],
+            bb->slice_positions[1][6], bb->slice_positions[1][7]);
     }
     
     return -1;
@@ -2184,21 +2511,15 @@ static void bb_roll_stretch(breakbeat_t *bb) {
 }
 
 static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
+    bb->envelope_frame = 0;
     slice_inputs_t in = {
-        .current_slice = bb->current_slice,
         .beat_position = beat_pos,
         .complexity = bb->complexity,
-        .anchor = bb->anchor,
-        .roll = bb->roll,
-        .phrase_bars = bb->phrase_bars,
-        .fill = bb->fill,
-        .bar_in_phrase = bb->phrase_bars > 0
-                       ? bb->bar_counter % bb->phrase_bars : 0,
     };
-    bb->current_slice = (bb->complexity == 0.0f)
-                      ? beat_pos
-                      : slice_select_next(&in, bb_rand, bb);
+    memcpy(in.anchors, bb->anchors, sizeof(in.anchors));
+    bb->current_slice = slice_select_next(&in, bb_rand, bb);
     bb->sub_slice_counter = 0;
+    bb->retrigger_variant = 0;
     bb_roll_stretch(bb);
 
     if (bb->stretch_length > 1) {
@@ -2211,7 +2532,7 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
         return;
     }
 
-    static const int retrigger_divs[BB_RETRIG_COUNT] = {2, 3, 4, 8, 16, 32};
+    static const int retrigger_divs[BB_RETRIG_COUNT] = {2, 3, 4, 8, 16, 32, 2, 2};
     float triggers_per_bar = (bb->active_length > 0.0f)
                            ? (8.0f / bb->active_length) : 8.0f;
     float inv_triggers_per_bar = 1.0f / triggers_per_bar;
@@ -2228,6 +2549,7 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
         bb->sub_slice_active = 1;
         int selected = fired[bb_random_u32(bb) % (uint32_t)fired_count];
         bb->retrigger_divisions = retrigger_divs[selected];
+        bb->retrigger_variant = selected == 6 ? 1 : (selected == 7 ? 2 : 0);
     } else {
         bb->sub_slice_active = 0;
     }
@@ -2238,17 +2560,23 @@ static void bb_fire_trigger(breakbeat_t *bb, int beat_pos) {
 
 static void bb_read_frame(const breakbeat_t *bb, uint32_t idx,
                           float *left, float *right) {
-    int nch = bb->num_channels;
-    if (bb->audio_format == WAV_FORMAT_FLOAT) {
-        const float *data = (const float *)bb->data;
+    bb_read_sample_frame(bb->data, bb->num_channels, bb->audio_format,
+                         bb->bits_per_sample, idx, left, right);
+}
+
+static void bb_read_sample_frame(const void *sample_data, int nch, int format,
+                                 int bits, uint32_t idx,
+                                 float *left, float *right) {
+    if (format == WAV_FORMAT_FLOAT) {
+        const float *data = (const float *)sample_data;
         *left = data[idx * nch];
         *right = data[idx * nch + (nch == 2)];
-    } else if (bb->bits_per_sample == 16) {
-        const int16_t *data = (const int16_t *)bb->data;
+    } else if (bits == 16) {
+        const int16_t *data = (const int16_t *)sample_data;
         *left = data[idx * nch] / 32768.0f;
         *right = data[idx * nch + (nch == 2)] / 32768.0f;
-    } else if (bb->bits_per_sample == 24) {
-        const uint8_t *data = (const uint8_t *)bb->data;
+    } else if (bits == 24) {
+        const uint8_t *data = (const uint8_t *)sample_data;
         uint32_t base = idx * (uint32_t)nch * 3u;
         int32_t l = data[base] | (data[base + 1] << 8) | (data[base + 2] << 16);
         if (l & 0x800000) l |= (int32_t)0xFF000000;
@@ -2259,8 +2587,8 @@ static void bb_read_frame(const breakbeat_t *bb, uint32_t idx,
         }
         *left = (float)l / 8388608.0f;
         *right = (float)r / 8388608.0f;
-    } else if (bb->bits_per_sample == 32) {
-        const int32_t *data = (const int32_t *)bb->data;
+    } else if (bits == 32) {
+        const int32_t *data = (const int32_t *)sample_data;
         *left = (float)data[idx * nch] / 2147483648.0f;
         *right = (float)data[idx * nch + (nch == 2)] / 2147483648.0f;
     } else {
@@ -2361,6 +2689,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
     if (bb->just_reset) {
         bb->just_reset = 0;
         bb->play_pos = (float)bb->slice_starts[0];
+        bb->envelope_frame = 0;
         bb_grain_reset(&bb->grain);
         if (running && bb->pending_manual_slice < 0) {
             bb_roll_stretch(bb);
@@ -2377,6 +2706,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         if (bb_select_loop(bb, loop, running) == 0) {
             bb->current_slice = slice;
             bb->play_pos = (float)bb->slice_starts[slice];
+            bb->envelope_frame = 0;
             bb_grain_reset(&bb->grain);
             bb->playing = 1;
             bb->sub_slice_active = 0;
@@ -2406,13 +2736,28 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
                       : bb->active_length;
     float spt = bb_timing_samples_per_trigger(bb->stable_bpm,
                                                playback_length, MOVE_SAMPLE_RATE);
-    float slice_len = (bb->current_slice < 8)
-                    ? (float)bb->slice_lengths[bb->current_slice] : 0.0f;
-    float rate = (slice_len > 0.0f && spt > 0.0f)
-               ? slice_len / (spt * (float)bb->stretch_length) : 1.0f;
+    /* Manual start markers can differ from the grid. Keep the playback rate
+     * tied to the original eight-part grid, not the distance between markers. */
+    float grid_slice_len = (float)(bb->total_frames / 8u);
+    float rate = (grid_slice_len > 0.0f && spt > 0.0f)
+               ? grid_slice_len / (spt * (float)bb->stretch_length) : 1.0f;
     int grain_enabled = bb->pitch_lock || bb->grain_fx > 0 || bb->stretch_length > 1;
     int grain_pitch_lock = bb->pitch_lock || bb->stretch_length > 1;
     int cycle_frames = bb->grain_cycle_ms * MOVE_SAMPLE_RATE / 1000;
+    float envelope_slot = spt * (float)(bb->stretch_span > 0 ? bb->stretch_span : 1);
+    float retrig_fraction = bb->retrigger_variant == 1 ? 1.0f / 4.0f
+                          : (bb->retrigger_variant == 2 ? 3.0f / 4.0f : 0.0f);
+    if (bb->manual_slice_active && bb->note_quant_ticks == 6)
+        envelope_slot *= 0.5f;
+    if (bb->sub_slice_active && bb->retrigger_divisions > 1) {
+        if (retrig_fraction > 0.0f)
+            envelope_slot *= bb->sub_slice_counter ? 1.0f - retrig_fraction
+                                                   : retrig_fraction;
+        else envelope_slot /= (float)bb->retrigger_divisions;
+    }
+    uint32_t envelope_total = envelope_slot > 1.0f ? (uint32_t)envelope_slot : 1u;
+    uint32_t attack_frames = (uint32_t)(bb->attack_ms * MOVE_SAMPLE_RATE / 1000);
+    uint32_t decay_frames = (uint32_t)(bb->decay_ms * MOVE_SAMPLE_RATE / 1000);
     
     for (int i = 0; i < frames; i++) {
         if (running && bb->manual_slice_active && bb->current_slice < 8) {
@@ -2426,7 +2771,20 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
                 bb->play_pos = (float)start +
                                fmodf(bb->play_pos - (float)start, (float)len);
         }
-        uint32_t idx = (uint32_t)bb->play_pos;
+        int ordinary_slice = !bb->manual_slice_active && !bb->sub_slice_active &&
+                             bb->stretch_length <= 1 && bb->current_slice < 8;
+        int reverse_early_end = ordinary_slice && bb->early_end && !grain_enabled;
+        if (ordinary_slice && !reverse_early_end &&
+            bb->play_pos >= (float)(bb->slice_starts[bb->current_slice] +
+                                     bb->slice_lengths[bb->current_slice])) {
+            out_lr[i * 2] = out_lr[i * 2 + 1] = 0;
+            continue; /* the next source attack is this slice's early out */
+        }
+        uint32_t idx = reverse_early_end
+                     ? bb_reflected_frame(bb->slice_starts[bb->current_slice],
+                                          bb->slice_lengths[bb->current_slice],
+                                          bb->play_pos)
+                     : (uint32_t)bb->play_pos;
         if (idx >= bb->total_frames) {
             bb->play_pos = 0; // Loop always for now
             idx = 0;
@@ -2451,6 +2809,14 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         }
         
         float gain = bb->loop_gain[bb->current_loop == 'B'];
+        if (attack_frames && bb->envelope_frame < attack_frames)
+            gain *= (float)bb->envelope_frame / (float)attack_frames;
+        if (decay_frames) {
+            uint32_t remaining = bb->envelope_frame < envelope_total
+                               ? envelope_total - bb->envelope_frame : 0;
+            if (remaining < decay_frames)
+                gain *= (float)remaining / (float)decay_frames;
+        }
         int32_t L = (int32_t)(fL * gain * 32767.0f);
         int32_t R = (int32_t)(fR * gain * 32767.0f);
         
@@ -2459,6 +2825,7 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
         
         out_lr[i * 2]     = (int16_t)L;
         out_lr[i * 2 + 1] = (int16_t)R;
+        if (bb->envelope_frame < UINT32_MAX) bb->envelope_frame++;
         
         if (bb->sub_slice_active) {
             uint32_t start = bb->slice_starts[bb->current_slice];
@@ -2466,11 +2833,19 @@ static void bb_render_block(void *instance, int16_t *out_lr, int frames) {
             uint32_t part_len = len / bb->retrigger_divisions;
             if (part_len == 0) part_len = 1;
             
-            if (bb->play_pos >= start + part_len) {
+            int repeat_due = retrig_fraction > 0.0f
+                           ? bb->envelope_frame >= (uint32_t)(spt * retrig_fraction)
+                           : bb->play_pos >= start + part_len;
+            if (repeat_due) {
                 if (bb->sub_slice_counter < bb->retrigger_divisions - 1) {
                     bb->play_pos = start; // Loop back!
                     bb_grain_reset(&bb->grain);
                     bb->sub_slice_counter++;
+                    bb->envelope_frame = 0;
+                    if (retrig_fraction > 0.0f) {
+                        float remaining = spt * (1.0f - retrig_fraction);
+                        envelope_total = remaining > 1.0f ? (uint32_t)remaining : 1u;
+                    }
                 }
             }
         }

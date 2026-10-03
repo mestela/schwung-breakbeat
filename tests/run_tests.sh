@@ -28,10 +28,15 @@ cc -Wall -Wextra -O0 -g -std=c99 \
 
 ./build/tests/test_grain_stretch
 
+cc -Wall -Wextra -O0 -g -std=c99 -Isrc/dsp \
+    tests/test_manual_slices.c src/dsp/manual_slices.c -lm \
+    -o build/tests/test_manual_slices
+./build/tests/test_manual_slices
+
 mkdir -p build/tests
 cc -Wall -Wextra -O0 -g -std=c11 -shared -fPIC \
     -Isrc/dsp \
-    src/dsp/breakbeat.c src/dsp/slice_select.c src/dsp/bb_timing.c src/dsp/grain_stretch.c \
+    src/dsp/breakbeat.c src/dsp/slice_select.c src/dsp/bb_timing.c src/dsp/grain_stretch.c src/dsp/manual_slices.c \
     -lm -pthread \
     -o build/tests/dsp.so
 
@@ -47,3 +52,4 @@ cc -Wall -Wextra -O0 -g -std=c11 -rdynamic \
     "$REPO_ROOT/samples/sesame.wav"
 
 node tests/test_status_view.js
+node tests/test_slice_editor.js

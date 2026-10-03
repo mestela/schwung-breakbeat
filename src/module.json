@@ -2,7 +2,7 @@
   "id": "breakbeat",
   "name": "Breakbeat",
   "abbrev": "BB",
-  "version": "0.4.34",
+  "version": "0.4.47",
   "description": "Breakbeat generator with algorithmic retriggering",
   "author": "mestela",
   "license": "MIT",
@@ -120,6 +120,10 @@
               "label": "Anchors"
             },
             {
+              "level": "slicing",
+              "label": "Slicing"
+            },
+            {
               "level": "retrig",
               "label": "Retrig"
             },
@@ -130,6 +134,10 @@
             {
               "level": "master",
               "label": "Master"
+            },
+            {
+              "level": "envelope",
+              "label": "Envelope"
             }
           ],
           "knobs": [
@@ -145,40 +153,163 @@
           "name": "Main"
         },
         "anchors": {
-          "name": "Anchors",
+          "label": "Anchors",
           "params": [
             {
-              "key": "anchor",
-              "label": "Anchor Strength",
+              "key": "anchor_1",
+              "label": "Slice 1 at Position 1",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0,
-              "short_name": "Anchor"
+              "short_name": "Slice 1"
             },
             {
-              "key": "roll",
-              "label": "Roll Amount",
+              "key": "anchor_2",
+              "label": "Slice 2 at Position 2",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0,
-              "short_name": "Roll"
+              "short_name": "Slice 2"
             },
             {
-              "key": "fill",
-              "label": "Fill Amount",
+              "key": "anchor_3",
+              "label": "Slice 3 at Position 3",
               "type": "int",
               "min": 0,
               "max": 100,
               "default": 0,
-              "short_name": "Fill"
+              "short_name": "Slice 3"
+            },
+            {
+              "key": "anchor_4",
+              "label": "Slice 4 at Position 4",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Slice 4"
+            },
+            {
+              "key": "anchor_5",
+              "label": "Slice 5 at Position 5",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Slice 5"
+            },
+            {
+              "key": "anchor_6",
+              "label": "Slice 6 at Position 6",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Slice 6"
+            },
+            {
+              "key": "anchor_7",
+              "label": "Slice 7 at Position 7",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Slice 7"
+            },
+            {
+              "key": "anchor_8",
+              "label": "Slice 8 at Position 8",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Slice 8"
             }
           ],
           "knobs": [
-            "anchor",
-            "roll",
-            "fill"
+            "anchor_1",
+            "anchor_2",
+            "anchor_3",
+            "anchor_4",
+            "anchor_5",
+            "anchor_6",
+            "anchor_7",
+            "anchor_8"
+          ]
+        },
+        "slicing": {
+          "label": "Slicing",
+          "params": [
+            {
+              "key": "mode_a",
+              "label": "Break A Mode",
+              "type": "enum",
+              "options": [
+                "Grid",
+                "Manual"
+              ],
+              "default": 0,
+              "short_name": "A Mode"
+            },
+            {
+              "key": "edit_a",
+              "label": "Edit Break A",
+              "type": "canvas",
+              "short_name": "Edit A",
+              "canvas_script": "slice_editor.js",
+              "show_value": false,
+              "show_footer": false,
+              "fullscreen_live_ms": 100,
+              "extra_keys": [
+                "edit_a",
+                "wave_a"
+              ]
+            },
+            {
+              "key": "mode_b",
+              "label": "Break B Mode",
+              "type": "enum",
+              "options": [
+                "Grid",
+                "Manual"
+              ],
+              "default": 0,
+              "short_name": "B Mode"
+            },
+            {
+              "key": "edit_b",
+              "label": "Edit Break B",
+              "type": "canvas",
+              "short_name": "Edit B",
+              "canvas_script": "slice_editor.js",
+              "show_value": false,
+              "show_footer": false,
+              "fullscreen_live_ms": 100,
+              "extra_keys": [
+                "edit_b",
+                "wave_b"
+              ]
+            },
+            {
+              "key": "early_end",
+              "label": "Early End",
+              "type": "enum",
+              "options": [
+                "Silence",
+                "Reverse"
+              ],
+              "default": 0,
+              "short_name": "Early End"
+            }
+          ],
+          "knobs": [
+            "mode_a",
+            "edit_a",
+            "mode_b",
+            "edit_b",
+            "early_end"
           ]
         },
         "retrig": {
@@ -192,6 +323,24 @@
               "max": 100,
               "default": 0,
               "short_name": "Retrig 2x"
+            },
+            {
+              "key": "retrig_push",
+              "label": "Push 2x (first two 4x hits)",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Push 2x"
+            },
+            {
+              "key": "retrig_drag",
+              "label": "Drag 2x (dotted 16th repeat)",
+              "type": "int",
+              "min": 0,
+              "max": 100,
+              "default": 0,
+              "short_name": "Drag 2x"
             },
             {
               "key": "retrig_3x",
@@ -241,6 +390,8 @@
           ],
           "knobs": [
             "retrig_2x",
+            "retrig_push",
+            "retrig_drag",
             "retrig_3x",
             "retrig_4x",
             "retrig_8x",
@@ -382,6 +533,35 @@
             "A_vol",
             "B_vol",
             "quant"
+          ]
+        },
+        "envelope": {
+          "label": "Envelope",
+          "params": [
+            {
+              "key": "attack_ms",
+              "label": "Attack",
+              "type": "int",
+              "min": 0,
+              "max": 250,
+              "default": 0,
+              "unit": "ms",
+              "short_name": "Attack"
+            },
+            {
+              "key": "decay_ms",
+              "label": "Decay",
+              "type": "int",
+              "min": 0,
+              "max": 250,
+              "default": 0,
+              "unit": "ms",
+              "short_name": "Decay"
+            }
+          ],
+          "knobs": [
+            "attack_ms",
+            "decay_ms"
           ]
         }
       }

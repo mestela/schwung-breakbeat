@@ -7,11 +7,10 @@
   "B_chance": 92,
   "complexity": 25,
   "phrase": "4 bars",
-  "anchor": 39,
-  "roll": 0,
-  "fill": 0,
   "retrig_2x": 0,
   "retrig_3x": 0,
   "retrig_4x": 21,
-  "retrig_8x": 0
+  "retrig_8x": 0,
+  "anchor_1": 39,
+  "anchor_5": 39
 }

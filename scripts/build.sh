@@ -95,6 +95,7 @@ echo "Compiling DSP..."
     src/dsp/slice_select.c \
     src/dsp/bb_timing.c \
     src/dsp/grain_stretch.c \
+    src/dsp/manual_slices.c \
     -o build/dsp.so \
     -lm -pthread
 
@@ -124,6 +125,7 @@ echo "  name/abbrev set to: Breakbeat v${_MINOR}.${_PATCH} / ${_ABBREV}"
 
 cat src/ui.js > "$DIST_DIR/ui.js"
 cat src/status_view.js > "$DIST_DIR/status_view.js"
+cat src/slice_editor.js > "$DIST_DIR/slice_editor.js"
 
 # Bundle samples
 mkdir -p "$DIST_DIR/samples"

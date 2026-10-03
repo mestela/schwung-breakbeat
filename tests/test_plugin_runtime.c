@@ -131,12 +131,12 @@ int main(int argc, char **argv) {
              "\"complexity\":0}",
              argv[2], argv[3]);
     api->set_param(instance, "state", state);
-    char wave_a[128], wave_b[128];
+    char wave_a[256], wave_b[256];
     api->get_param(instance, "wave_a", wave_a, sizeof(wave_a));
     api->get_param(instance, "wave_b", wave_b, sizeof(wave_b));
-    CHECK(strlen(wave_a) == 64 && strlen(wave_b) == 64 &&
-          strspn(wave_a, "0123456789abcdef") == 64 &&
-          strspn(wave_b, "0123456789abcdef") == 64,
+    CHECK(strlen(wave_a) == 128 && strlen(wave_b) == 128 &&
+          strspn(wave_a, "0123456789abcdef") == 128 &&
+          strspn(wave_b, "0123456789abcdef") == 128,
           "both loaded samples publish bounded waveform summaries");
     memset(audio, 1, sizeof(audio));
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
@@ -152,6 +152,15 @@ int main(int argc, char **argv) {
     api->get_param(instance, "status", pad_status, sizeof(pad_status));
     CHECK(strncmp(pad_status, "A2", 2) == 0,
           "stopped pad selects the corresponding slice");
+    api->set_param(instance, "attack_ms", "5");
+    api->set_param(instance, "decay_ms", "250");
+    api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
+    CHECK(audio[0] == 0 && audio[1] == 0 &&
+          !buffer_is_silent(audio + 64, MOVE_FRAMES_PER_BLOCK * 2 - 64),
+          "attack fades in a manual slice instead of starting abruptly");
+    api->set_param(instance, "attack_ms", "0");
+    api->set_param(instance, "decay_ms", "0");
     api->set_param(instance, "A_vol", "0");
     api->on_midi(instance, pad_slice_two, 3, MOVE_MIDI_SOURCE_EXTERNAL);
     api->render_block(instance, audio, MOVE_FRAMES_PER_BLOCK);
@@ -247,7 +256,7 @@ int main(int argc, char **argv) {
     api->on_midi(instance, &trial_stop, 1, MOVE_MIDI_SOURCE_HOST);
     api->set_param(instance, "quant", "8ths");
 
-    char saved[2048];
+    char saved[4096];
     int saved_len = api->get_param(instance, "state", saved, sizeof(saved));
     CHECK(saved_len > 0 && strstr(saved, "\"preset_index\":0") != NULL,
           "state round-trips preset_index");
@@ -265,7 +274,49 @@ int main(int argc, char **argv) {
     api->set_param(instance, "stretch_pitch_max", "75");
     api->set_param(instance, "retrig_16x", "27");
     api->set_param(instance, "retrig_32x", "38");
+    api->set_param(instance, "retrig_push", "49");
+    api->set_param(instance, "retrig_drag", "61");
+    api->set_param(instance, "anchor_1", "80");
+    api->set_param(instance, "anchor_8", "35");
+    api->set_param(instance, "attack_ms", "5");
+    api->set_param(instance, "decay_ms", "120");
+    api->set_param(instance, "slice_a_3", "260000");
+    char edit_a[256], edit_b[256];
+    api->get_param(instance, "edit_a", edit_a, sizeof(edit_a));
+    api->get_param(instance, "edit_b", edit_b, sizeof(edit_b));
+    CHECK(strstr(edit_a, ",260000,") && edit_a[0] == '1' && edit_b[0] == '0',
+          "manual marker editing affects A independently of B");
+    api->set_param(instance, "mode_b", "Manual");
+    api->set_param(instance, "slice_b_4", "390000");
+    api->get_param(instance, "edit_b", edit_b, sizeof(edit_b));
+    CHECK(strstr(edit_b, ",390000,") && edit_b[0] == '1',
+          "B marker can be edited independently");
+    char zoom_a[256], zoom_b[256];
+    api->get_param(instance, "zoom_a_3", zoom_a, sizeof(zoom_a));
+    api->get_param(instance, "zoom_b_4", zoom_b, sizeof(zoom_b));
+    CHECK(strlen(zoom_a) >= 128 && strlen(zoom_b) >= 128 &&
+          strchr(zoom_a, ',') && strchr(zoom_b, ','),
+          "both fullscreen editors receive close waveform data");
+    char zoom_first[256];
+    long long first = 0, last = 0;
+    api->get_param(instance, "zoom_a_1", zoom_first, sizeof(zoom_first));
+    CHECK(sscanf(zoom_first, "%lld,%lld,", &first, &last) == 2 &&
+          first < 0 && last > 0 && -first == last,
+          "first slice zoom keeps its marker centered with space before the file");
     saved_len = api->get_param(instance, "state", saved, sizeof(saved));
+    CHECK(strstr(saved, "\"mode_a\":1") && strstr(saved, "\"mode_b\":1") &&
+          strstr(saved, "\"slice_a_3\":260000") &&
+          strstr(saved, "\"slice_b_4\":390000"),
+          "A/B manual modes and markers persist in Set state");
+    api->set_param(instance, "early_end", "Reverse");
+    char early_end_value[16];
+    api->get_param(instance, "early_end", early_end_value, sizeof(early_end_value));
+    char reversed_state[4096];
+    api->get_param(instance, "state", reversed_state, sizeof(reversed_state));
+    CHECK(strcmp(early_end_value, "1") == 0 &&
+          strstr(reversed_state, "\"early_end\":1"),
+          "reverse early end is controllable and saved");
+    api->set_param(instance, "early_end", "Silence");
     CHECK(saved_len > 0 && strstr(saved, "\"pitch_lock\":1") &&
           strstr(saved, "\"grain_fx\":100") &&
           strstr(saved, "\"grain_cycle_ms\":20") &&
@@ -277,10 +328,18 @@ int main(int argc, char **argv) {
           strstr(saved, "\"stretch_pitch_min\":25") &&
           strstr(saved, "\"stretch_pitch_max\":75") &&
           strstr(saved, "\"retrig_16x\":27") &&
-          strstr(saved, "\"retrig_32x\":38"),
+          strstr(saved, "\"retrig_32x\":38") &&
+          strstr(saved, "\"retrig_push\":49") &&
+          strstr(saved, "\"retrig_drag\":61") &&
+          strstr(saved, "\"anchor_1\":80") &&
+          strstr(saved, "\"anchor_8\":35") &&
+          strstr(saved, "\"attack_ms\":5") &&
+          strstr(saved, "\"decay_ms\":120"),
           "stretch controls are saved in song state");
     api->set_param(instance, "retrig_16x", "0");
     api->set_param(instance, "retrig_32x", "0");
+    api->set_param(instance, "retrig_push", "0");
+    api->set_param(instance, "retrig_drag", "0");
     api->set_param(instance, "pitch_lock", "0");
     api->set_param(instance, "grain_fx", "0");
     api->set_param(instance, "grain_cycle_ms", "40");
@@ -301,11 +360,30 @@ int main(int argc, char **argv) {
           strstr(hierarchy, "\"level\":\"retrig\"") &&
           strstr(hierarchy, "\"retrig_16x\"") &&
           strstr(hierarchy, "\"retrig_32x\"") &&
+          strstr(hierarchy, "\"retrig_push\"") &&
+          strstr(hierarchy, "\"retrig_drag\"") &&
           strstr(hierarchy, "\"name\":\"Main\"") &&
           hierarchy[hierarchy_len - 1] == '}',
           "stretch controls appear in complete device UI hierarchy");
     const char *retrig_page = strstr(hierarchy, "\"retrig\":{\"name\":\"Retrig\"");
     const char *anchors_page = strstr(hierarchy, "\"anchors\":{\"name\":\"Anchors\"");
+    const char *slicing_page = strstr(hierarchy, "\"slicing\":{\"name\":\"Slicing\"");
+    const char *stretch_page = strstr(hierarchy, "\"stretch\":{\"name\":\"Stretch\"");
+    const char *master_page = strstr(hierarchy, "\"master\":{\"name\":\"Master\"");
+    const char *envelope_page = strstr(hierarchy, "\"envelope\":{\"name\":\"Envelope\"");
+    CHECK(anchors_page && slicing_page && retrig_page && stretch_page &&
+          master_page && envelope_page &&
+          anchors_page < slicing_page && slicing_page < retrig_page &&
+          retrig_page < stretch_page && stretch_page < master_page &&
+          master_page < envelope_page &&
+          strstr(slicing_page, "\"knobs\":[\"mode_a\",\"edit_a\",\"mode_b\",\"edit_b\",\"early_end\"]"),
+          "page and Slicing knob order follows the requested layout");
+    CHECK(anchors_page && strstr(anchors_page,
+          "\"knobs\":[\"anchor_1\",\"anchor_2\",\"anchor_3\",\"anchor_4\",\"anchor_5\",\"anchor_6\",\"anchor_7\",\"anchor_8\"]") &&
+          !strstr(hierarchy, "\"key\":\"roll\"") &&
+          !strstr(hierarchy, "\"key\":\"fill\"") &&
+          strstr(hierarchy, "\"level\":\"envelope\""),
+          "Anchors has eight position controls and Envelope is available");
     CHECK(retrig_page && !strstr(retrig_page, "\"preset\"") &&
           strstr(retrig_page, "\"stretch\":{\"name\":\"Stretch\""),
           "named Retrig page has no Preset control and precedes Stretch");
@@ -329,16 +407,30 @@ int main(int argc, char **argv) {
           strstr(chain_params, "\"name\":\"Pitch Maximum\"") &&
           strstr(chain_params, "\"name\":\"Grain Cycle\""),
           "stretch controls retain short cell names and publish full header names");
-    api->set_param(instance, "state", saved);
     char stretch_value[16];
+    api->set_param(instance, "state", saved);
+    api->get_param(instance, "anchor_1", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "80") == 0, "Set restores the first position anchor");
+    api->get_param(instance, "decay_ms", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "120") == 0, "Set restores slice decay");
+    api->set_param(instance, "attack_ms", "0");
+    api->set_param(instance, "decay_ms", "0");
     api->get_param(instance, "retrig_16x", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "27") == 0,
           "song state restores 16x retrigger chance");
     api->get_param(instance, "retrig_32x", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "38") == 0,
           "song state restores 32x retrigger chance");
+    api->get_param(instance, "retrig_push", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "49") == 0,
+          "song state restores Push repeat chance");
+    api->get_param(instance, "retrig_drag", stretch_value, sizeof(stretch_value));
+    CHECK(strcmp(stretch_value, "61") == 0,
+          "song state restores Drag repeat chance");
     api->set_param(instance, "retrig_16x", "0");
     api->set_param(instance, "retrig_32x", "0");
+    api->set_param(instance, "retrig_push", "0");
+    api->set_param(instance, "retrig_drag", "0");
     api->get_param(instance, "grain_cycle_ms", stretch_value, sizeof(stretch_value));
     CHECK(strcmp(stretch_value, "20") == 0,
           "song state restores stretch settings");
@@ -675,6 +767,22 @@ int main(int argc, char **argv) {
     CHECK(strcmp(status_info, "A1R3,0,0,0") == 0,
           "fullscreen detail reports retrigger without stale stretch values");
     api->set_param(reference, "retrig_3x", "0");
+
+    const char *shifted_keys[] = {"retrig_push", "retrig_drag"};
+    const char *shifted_status[] = {"A1P2", "A1D2"};
+    for (int variant = 0; variant < 2; variant++) {
+        api->set_param(reference, shifted_keys[variant], "100");
+        api->on_midi(reference, &start, 1, MOVE_MIDI_SOURCE_HOST);
+        api->on_midi(reference, &first_clock, 1, MOVE_MIDI_SOURCE_HOST);
+        api->render_block(reference, expected_audio, MOVE_FRAMES_PER_BLOCK);
+        send_clock_ticks(api, reference, 12, expected_audio);
+        api->get_param(reference, "status", status, sizeof(status));
+        api->get_param(reference, "status_info", status_info, sizeof(status_info));
+        CHECK(strcmp(status, shifted_status[variant]) == 0 &&
+              strncmp(status_info, shifted_status[variant], 4) == 0,
+              "shifted two-hit repeat reports Push or Drag");
+        api->set_param(reference, shifted_keys[variant], "0");
+    }
 
     for (int rate = 0; rate < 2; rate++) {
         const char *key = rate == 0 ? "retrig_16x" : "retrig_32x";

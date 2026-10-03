@@ -2,7 +2,7 @@
 const MINI = {
     ' ': [0,0,0,0,0], ':':[0,2,0,2,0], '-':[0,0,7,0,0],
     '+':[0,2,7,2,0], 'A':[2,5,7,5,5], 'B':[6,5,6,5,6],
-    'C':[3,4,4,4,3], 'E':[7,4,6,4,7], 'G':[3,4,5,5,3],
+    'C':[3,4,4,4,3], 'D':[6,5,5,5,6], 'E':[7,4,6,4,7], 'G':[3,4,5,5,3],
     'H':[5,5,7,5,5], 'I':[7,2,2,2,7], 'L':[4,4,4,4,7],
     'N':[5,7,7,7,5], 'P':[6,5,6,4,4], 'R':[6,5,6,5,5],
     'S':[3,4,2,1,6], 'T':[7,2,2,2,2], 'X':[5,5,2,5,5],
@@ -25,7 +25,7 @@ function miniPrint(ctx, x, y, text) {
 
 function parseStatus(raw) {
     const fields = String(raw || '').split(',');
-    const match = /^([AB])([0-7])(?:([RS])(\d+))?$/.exec(fields[0]);
+    const match = /^([AB])([0-7])(?:([RSPD])(\d+))?$/.exec(fields[0]);
     return match ? { loop: match[1], slice: Number(match[2]),
                      mode: match[3] || '', factor: Number(match[4]) || 0,
                      length: Number(fields[1]) || 0,
@@ -41,11 +41,11 @@ function drawWave(ctx, wave, y, active) {
     for (let zone = 0; zone <= 8; zone++)
         ctx.fillRect(left + zone * zoneWidth, y, 1, 20, 1);
     const bins = String(wave || '');
-    for (let i = 0; i < 64 && i < bins.length; i++) {
+    for (let i = 0; i < 128 && i < bins.length; i++) {
         const value = parseInt(bins[i], 16);
         if (!Number.isFinite(value) || value === 0) continue;
         const half = Math.max(1, Math.round(value * 7 / 15));
-        const x = left + Math.floor(i * width / 64);
+        const x = left + Math.floor(i * width / bins.length);
         ctx.fillRect(x, center - half, 1, half * 2 + 1, 1);
     }
     if (active >= 0)
@@ -61,7 +61,9 @@ function drawOverview(ctx, detail, waveA, waveB) {
     drawWave(ctx, waveB, 33, current.loop === 'B' ? current.slice : -1);
     miniPrint(ctx, 46, 0, current.slice < 0 ? '' : `${current.loop}${current.slice}`);
     const labels = ['RETRIGGER:', 'STRTCH LEN:', 'STRTCH SLC:', 'STRCH PTCH:'];
-    const values = [current.mode === 'R' ? `${current.factor}X` : '',
+    const values = [current.mode === 'R' ? `${current.factor}X` :
+                    (current.mode === 'P' || current.mode === 'D') ?
+                    `${current.factor}${current.mode}` : '',
                     current.mode === 'S' ? `${current.length}X` : '',
                     current.mode === 'S' ? String(current.span) : '',
                     current.mode === 'S' ? `${current.pitch >= 0 ? '+' : ''}${current.pitch}` : ''];
