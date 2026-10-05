@@ -1,0 +1,28 @@
+name: Desktop plug-in
+on:
+  push:
+    branches: [feature/vst3]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: desktop/build/_deps
+          key: juce-9.0.3-${{ runner.os }}
+      - name: Configure
+        run: cmake -S desktop -B desktop/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build desktop/build --config Release --parallel 4
+      - name: Test
+        run: ctest --test-dir desktop/build -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: schwung-breakbeat-${{ runner.os }}
+          path: desktop/build/SchwungBreakbeat_artefacts/Release/VST3/
