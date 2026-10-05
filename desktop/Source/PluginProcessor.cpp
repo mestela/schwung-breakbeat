@@ -15,10 +15,13 @@ APVTS::ParameterLayout BreakbeatProcessor::makeParameters() {
     };
     add("complexity", "Complexity", 0, 100, 1, 50);
     add("bChance", "B chance", 0, 100, 1, 0);
-    add("phraseBars", "Phrase bars", 0, 16, 1, 0);
+    layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID("phraseBars", 1),
+        "Phrase", juce::StringArray {"Off", "2 bars", "4 bars", "8 bars", "16 bars"}, 0));
     for (int i = 0; i < 2; ++i) {
         auto p = i == 0 ? "A" : "B";
-        add(juce::String(p) + "Length", juce::String(p) + " length (bars)", .125f, 4, .125f, 1);
+        layout.add(std::make_unique<juce::AudioParameterChoice>(
+            juce::ParameterID(juce::String(p) + "Length", 1), juce::String(p) + " length",
+            juce::StringArray {"1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars"}, 2));
         add(juce::String(p) + "Volume", juce::String(p) + " volume", 0, 200, 1, 100);
         add(juce::String(p) + "Manual", juce::String(p) + " manual slices", 0, 1, 1, 0);
         for (int j = 0; j < 8; ++j)
@@ -64,10 +67,12 @@ breakbeat::Settings BreakbeatProcessor::readSettings() const {
     breakbeat::Settings s;
     s.complexity = v("complexity") / 100;
     s.bChance = v("bChance") / 100;
-    s.phraseBars = static_cast<int>(v("phraseBars"));
+    static constexpr int phraseValues[] {0, 2, 4, 8, 16};
+    static constexpr float lengthValues[] {.25f, .5f, 1, 2, 4, 8};
+    s.phraseBars = phraseValues[juce::jlimit(0, 4, static_cast<int>(v("phraseBars")))];
     for (int i = 0; i < 2; ++i) {
         auto p = i ? "B" : "A";
-        s.lengthBars[i] = v(juce::String(p) + "Length");
+        s.lengthBars[i] = lengthValues[juce::jlimit(0, 5, static_cast<int>(v(juce::String(p) + "Length")))];
         s.volume[i] = v(juce::String(p) + "Volume") / 100;
         s.sliceMode[i] = v(juce::String(p) + "Manual") > .5f;
         for (int j = 0; j < 8; ++j)
