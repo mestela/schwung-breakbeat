@@ -24,12 +24,15 @@ jobs:
         run: ctest --test-dir desktop/build -C Release --output-on-failure
       - name: Package macOS plug-in
         if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent 'desktop/build/SchwungBreakbeat_artefacts/Release/VST3/Schwung Breakbeat.vst3' desktop/build/Schwung-Breakbeat-macOS.vst3.zip
+        run: |
+          mkdir -p desktop/build/vst3-dmg
+          ditto 'desktop/build/SchwungBreakbeat_artefacts/Release/VST3/Schwung Breakbeat.vst3' 'desktop/build/vst3-dmg/Schwung Breakbeat.vst3'
+          hdiutil create -ov -format UDZO -fs HFS+ -volname 'Schwung Breakbeat VST3' -srcfolder desktop/build/vst3-dmg desktop/build/Schwung-Breakbeat-macOS.vst3.dmg
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
           name: schwung-breakbeat-macOS
-          path: desktop/build/Schwung-Breakbeat-macOS.vst3.zip
+          path: desktop/build/Schwung-Breakbeat-macOS.vst3.dmg
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:

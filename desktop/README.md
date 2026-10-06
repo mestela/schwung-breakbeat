@@ -12,8 +12,11 @@ ctest --test-dir desktop/build -C Release --output-on-failure
 ```
 
 The first configure downloads JUCE 9.0.3. The macOS VST3 is under
-`desktop/build/SchwungBreakbeat_artefacts/Release/VST3/`. Copy the `.vst3`
-bundle to `~/Library/Audio/Plug-Ins/VST3/` to try it in Live. Load a WAV,
+`desktop/build/SchwungBreakbeat_artefacts/Release/VST3/`. The downloadable
+Mac disk image contains one `.vst3` bundle; copy that whole bundle to
+`~/Library/Audio/Plug-Ins/VST3/` to try it in Live. A VST3 bundle contains
+internal `Contents` folders, but those should stay inside the `.vst3` package.
+Load a WAV,
 AIFF, FLAC or MP3 into A or B, then start the host transport. MIDI notes
 36–51 select the 16 pads directly.
 
