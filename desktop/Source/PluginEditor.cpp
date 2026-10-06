@@ -37,14 +37,6 @@ constexpr const char* pageHints[] {
     "LENGTH / SPAN / PITCH", "OUTPUT LEVEL / GRAIN ENGINE",
     "ATTACK / DECAY / REVERSE"
 };
-void drawScrew(juce::Graphics& g, float x, float y) {
-    g.setColour(juce::Colour(0xff5c605d));
-    g.fillEllipse(x - 9, y - 9, 18, 18);
-    g.setColour(juce::Colour(0xffd6d7ce));
-    g.fillEllipse(x - 7, y - 7, 14, 14);
-    g.setColour(juce::Colour(0xff555a56));
-    g.drawLine(x - 4, y + 2, x + 4, y - 2, 1.5f);
-}
 }
 
 BreakbeatLookAndFeel::BreakbeatLookAndFeel() {
@@ -241,17 +233,13 @@ void BreakbeatEditor::resized() {
 }
 void BreakbeatEditor::paint(juce::Graphics& g) {
     g.fillAll(background);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd0d1c9), juce::Point<float>(30, 0),
-                                         juce::Colour(0xff9fa39d), juce::Point<float>(30, 540), false));
-    g.fillRect(30, 0, 1020, 540);
-    g.setColour(juce::Colour(0xff666b66));
-    g.fillRect(0, 0, 30, 540);
-    g.fillRect(1050, 0, 30, 540);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd0d1c9), juce::Point<float>(0, 0),
+                                         juce::Colour(0xff9fa39d), juce::Point<float>(0, 540), false));
+    g.fillRect(getLocalBounds());
     g.setColour(juce::Colour(0xffe4e4da));
-    g.fillRect(30, 0, 1020, 2);
+    g.fillRect(0, 0, 1080, 2);
     g.setColour(juce::Colour(0xff60665f));
-    g.fillRect(30, 537, 1020, 3);
-    for (float x : {15.0f, 1065.0f}) for (float y : {31.0f, 509.0f}) drawScrew(g, x, y);
+    g.fillRect(0, 537, 1080, 3);
     g.setColour(juce::Colour(0xff252b29));
     g.setFont(panelFont(32.0f));
     g.drawText("BREAKBEAT", 65, 23, 310, 34, juce::Justification::left);
