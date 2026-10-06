@@ -14,6 +14,21 @@ const juce::Colour lcdText {0xff9ce4df};
 const juce::Colour lcdAccent {0xfff4d454};
 const juce::Colour lcdGrid {0xff31545d};
 const juce::Colour waveColour {0xff63c4aa};
+juce::FontOptions panelFont(float size, bool strong = false) {
+   #if JUCE_MAC
+    return {"Futura", size, strong ? juce::Font::bold : juce::Font::plain};
+   #else
+    return {juce::Font::getDefaultSansSerifFontName(), size,
+            strong ? juce::Font::bold : juce::Font::plain};
+   #endif
+}
+juce::FontOptions displayFont(float size) {
+   #if JUCE_MAC
+    return {"Geneva", size, juce::Font::plain};
+   #else
+    return {juce::Font::getDefaultSansSerifFontName(), size, juce::Font::plain};
+   #endif
+}
 constexpr const char* pageNames[] {"PLAY", "ANCHOR", "SLICE", "RETRIG", "STRETCH", "MIX", "ENV"};
 constexpr const char* pageHeadings[] {"PLAYBACK", "ANCHOR MEMORY", "SLICE EDIT", "RETRIGGER", "GRAIN STRETCH", "MIX / GRAIN", "AMPLITUDE ENVELOPE"};
 constexpr const char* pageHints[] {
@@ -88,7 +103,7 @@ void BreakbeatLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button&
     }
 }
 void BreakbeatLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool) {
-    g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    g.setFont(panelFont(14.0f));
     g.setColour(juce::Colour(0xff202925));
     g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(5), juce::Justification::centred, 1);
 }
@@ -148,7 +163,7 @@ void BreakbeatEditor::addDial(int group, const juce::String& id, const juce::Str
     control.row = row;
     control.label = std::make_unique<juce::Label>(id, name);
     control.label->setJustificationType(juce::Justification::centred);
-    control.label->setFont(juce::FontOptions(10.5f, juce::Font::bold));
+    control.label->setFont(panelFont(13.0f));
     control.slider = std::make_unique<juce::Slider>();
     control.slider->setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     control.slider->setTextBoxStyle(juce::Slider::TextBoxBelow, false, 92, 23);
@@ -238,11 +253,11 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
     g.fillRect(30, 537, 1020, 3);
     for (float x : {15.0f, 1065.0f}) for (float y : {31.0f, 509.0f}) drawScrew(g, x, y);
     g.setColour(juce::Colour(0xff252b29));
-    g.setFont(juce::FontOptions(25.0f, juce::Font::bold));
+    g.setFont(panelFont(32.0f));
     g.drawText("BREAKBEAT", 65, 23, 310, 34, juce::Justification::left);
-    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.setFont(panelFont(14.0f));
     g.drawText("SCHWUNG", 805, 24, 200, 19, juce::Justification::right);
-    g.setFont(juce::FontOptions(10.0f));
+    g.setFont(panelFont(10.0f));
     g.drawText("DIGITAL BREAK SAMPLER  /  BB-08", 730, 43, 275, 15, juce::Justification::right);
     g.setColour(juce::Colour(0xff788078));
     for (int x = 55; x < 1020; x += 5) g.drawVerticalLine(x, 66, 68);
@@ -260,16 +275,16 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
         int x = static_cast<int>(bounds.getX());
         g.fillEllipse(x + 20, 125, 8, 8);
         g.setColour(lcdText);
-        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 16.0f, juce::Font::bold));
+        g.setFont(displayFont(17.0f));
         g.drawText(i ? "B>" : "A>", x + 15, 94, 38, 25, juce::Justification::left);
         g.setColour(lcdAccent);
-        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
+        g.setFont(displayFont(16.0f));
         auto path = processor.samplePath(i);
         auto name = path.isEmpty() ? juce::String("NO SAMPLE") : juce::File(path).getFileName().toUpperCase();
         g.drawFittedText(name, x + 61, 94, 285, 25,
                          juce::Justification::centredLeft, 1);
         g.setColour(lcdText);
-        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+        g.setFont(displayFont(12.0f));
         auto sample = processor.sampleForDisplay(i);
         auto detail = sample && sample->valid()
             ? juce::String(sample->frames() / sample->sampleRate, 1) + " SEC   " + juce::String(static_cast<int>(sample->sampleRate)) + " HZ"
@@ -283,10 +298,10 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
     g.setColour(panel);
     g.fillRect(59, 182, 962, 276);
     g.setColour(juce::Colour(0xffd5dbcf));
-    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.setFont(panelFont(16.0f));
     g.drawText(pageHeadings[page], 70, 188, 360, 18, juce::Justification::left);
     g.setColour(muted);
-    g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+    g.setFont(panelFont(10.0f));
     g.drawFittedText(pageHints[page], 498, 188, 512, 18, juce::Justification::centredRight, 1);
     g.setColour(juce::Colour(0xff5f6861));
     g.fillRect(69, 210, 942, 1);
@@ -294,7 +309,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
         g.setColour(juce::Colour(0xff596660));
         g.fillRect(704, 220, 1, 226);
         g.setColour(muted);
-        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+        g.setFont(panelFont(10.5f));
         g.drawText(editLoop ? "B / SAMPLE & SLICE POSITION" : "A / SAMPLE & SLICE POSITION", 73, 392, 400, 18, juce::Justification::left);
         auto active = processor.currentSlice();
         for (int i = 0; i < 8; ++i) {
@@ -302,7 +317,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
             g.setColour(i == active && processor.currentLoop() == editLoop ? lcdAccent : juce::Colour(0xff252b29));
             g.fillRect(box);
             g.setColour(i == active && processor.currentLoop() == editLoop ? inset : lcdText);
-            g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::bold));
+            g.setFont(panelFont(14.0f));
             g.drawText(juce::String(i + 1), box.toNearestInt(), juce::Justification::centred);
             g.setColour(i == active ? accent : juce::Colour(0xff657267));
             g.fillEllipse(box.getCentreX() - 2.5f, box.getY() - 8, 5, 5);
@@ -311,7 +326,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
     g.setColour(juce::Colour(0xff5b625c));
     g.fillRect(54, 468, 972, 1);
     g.setColour(juce::Colour(0xff354037));
-    g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::plain));
+    g.setFont(panelFont(9.0f));
     g.drawText("MIDI 36-51  /  HOST SYNC", 69, 515, 300, 14, juce::Justification::left);
     g.drawText("SCHWUNG  BB-08", 835, 515, 175, 14, juce::Justification::right);
     if (page != 0 && page != 2) return;
@@ -322,7 +337,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
     auto sample = processor.sampleForDisplay(editLoop);
     if (!sample || !sample->valid()) {
         g.setColour(lcdText);
-        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 14.0f, juce::Font::plain));
+        g.setFont(displayFont(14.0f));
         g.drawText("LOAD A SAMPLE TO EDIT ITS EIGHT STARTS", waveformBounds, juce::Justification::centred);
         return;
     }
@@ -372,7 +387,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
         g.drawVerticalLine(x, static_cast<float>(waveformBounds.getY()), static_cast<float>(waveformBounds.getBottom()));
         g.fillRoundedRectangle(juce::Rectangle<float>(static_cast<float>(x + 2), static_cast<float>(waveformBounds.getY() + 5), 20, 20), 2);
         g.setColour(inset);
-        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::bold));
+        g.setFont(displayFont(12.0f));
         g.drawText(juce::String(j + 1), x + 2, waveformBounds.getY() + 5, 20, 20, juce::Justification::centred);
     }
     if (draggingMarker < 0 && processor.currentLoop() == editLoop) {
@@ -384,7 +399,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
         g.drawVerticalLine(x, static_cast<float>(waveformBounds.getY()), static_cast<float>(waveformBounds.getBottom()));
     }
     g.setColour(lcdText);
-    g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+    g.setFont(displayFont(11.0f));
     g.drawText(draggingMarker >= 0 ? "FINE EDIT  /  RELEASE FOR FULL VIEW"
                                    : page == 0 ? "CLICK TO EDIT SLICE STARTS" : "DRAG A NUMBERED START MARKER",
                waveformBounds.getX() + 10, waveformBounds.getBottom() - 26, 350, 20, juce::Justification::left);
