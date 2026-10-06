@@ -1,6 +1,16 @@
 #pragma once
 #include "PluginProcessor.h"
 
+class BreakbeatLookAndFeel final : public juce::LookAndFeel_V4 {
+public:
+    BreakbeatLookAndFeel();
+    void drawRotarySlider(juce::Graphics&, int, int, int, int, float, float, float,
+                          juce::Slider&) override;
+    void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&,
+                              bool, bool) override;
+    void drawButtonText(juce::Graphics&, juce::TextButton&, bool, bool) override;
+};
+
 class BreakbeatEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit BreakbeatEditor(BreakbeatProcessor&);
@@ -16,9 +26,12 @@ private:
     void setEditLoop(int);
     void moveMarker(const juce::MouseEvent&);
     void openSample(int);
-    void addSlider(int page, const juce::String& id, const juce::String& label,
+    void addDial(int page, const juce::String& id, const juce::String& label,
+                   int column, int row);
+    void addSwitch(int page, const juce::String& id, const juce::String& label,
                    int column, int row);
     BreakbeatProcessor& processor;
+    BreakbeatLookAndFeel skin;
     int page = 0;
     int editLoop = 0;
     int draggingMarker = -1;
@@ -33,7 +46,13 @@ private:
         std::unique_ptr<juce::Slider> slider;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
+    struct Switch {
+        int page = 0, column = 0, row = 0;
+        std::unique_ptr<juce::TextButton> button;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+    };
     std::vector<Control> controls;
+    std::vector<Switch> switches;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> waveformBounds;
     const breakbeat::Sample* cachedWaveform = nullptr;
