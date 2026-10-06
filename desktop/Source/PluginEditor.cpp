@@ -3,68 +3,87 @@
 #include <cmath>
 
 namespace {
-const juce::Colour background {0xff252620};
-const juce::Colour panel {0xff30312a};
-const juce::Colour inset {0xff1d1f1b};
-const juce::Colour hairline {0xff494a40};
-const juce::Colour ink {0xffece9dc};
-const juce::Colour muted {0xffaaa99b};
-const juce::Colour accent {0xffdcb05e};
-const juce::Colour waveColour {0xffa7bea9};
-constexpr const char* pageNames[] {"Play", "Anchors", "Slices", "Retrig", "Stretch", "Mix", "Envelope"};
-constexpr const char* pageHeadings[] {"PLAYBACK", "ANCHORS", "SLICE STARTS", "RETRIGGERS", "STRETCH", "MIX / GRAIN", "ENVELOPE"};
+const juce::Colour background {0xffb5b7af}; // satin metal
+const juce::Colour panel {0xff393e3c};      // recessed control bay
+const juce::Colour inset {0xffaab99e};      // backlit LCD
+const juce::Colour hairline {0xff70756f};
+const juce::Colour ink {0xffe8e9dd};
+const juce::Colour muted {0xffaeb5aa};
+const juce::Colour accent {0xffdf6145};     // status LED
+const juce::Colour waveColour {0xff263d33};
+constexpr const char* pageNames[] {"PLAY", "ANCHOR", "SLICE", "RETRIG", "STRETCH", "MIX", "ENV"};
+constexpr const char* pageHeadings[] {"PLAYBACK", "ANCHOR MEMORY", "SLICE EDIT", "RETRIGGER", "GRAIN STRETCH", "MIX / GRAIN", "AMPLITUDE ENVELOPE"};
 constexpr const char* pageHints[] {
-    "The break follows the host transport.", "Keep the natural slice at each position.",
-    "Drag a marker for precise timing.", "Chance per bar. Rates compete when several fire.",
-    "Hold, repitch and scatter slices.", "Level and grain behaviour.",
-    "Shape the start and end of each slice."
+    "HOST CLOCK / 8 POSITIONS", "NATURAL SLICE PROBABILITY",
+    "DRAG START MARKERS / AUTO MANUAL", "REPEATS PER BAR",
+    "LENGTH / SPAN / PITCH", "OUTPUT LEVEL / GRAIN ENGINE",
+    "ATTACK / DECAY / REVERSE"
 };
+void drawScrew(juce::Graphics& g, float x, float y) {
+    g.setColour(juce::Colour(0xff5c605d));
+    g.fillEllipse(x - 9, y - 9, 18, 18);
+    g.setColour(juce::Colour(0xffd6d7ce));
+    g.fillEllipse(x - 7, y - 7, 14, 14);
+    g.setColour(juce::Colour(0xff555a56));
+    g.drawLine(x - 4, y + 2, x + 4, y - 2, 1.5f);
+}
 }
 
 BreakbeatLookAndFeel::BreakbeatLookAndFeel() {
-    setColour(juce::Slider::textBoxTextColourId, ink);
+    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xff24382c));
     setColour(juce::Slider::textBoxBackgroundColourId, inset);
-    setColour(juce::Slider::textBoxOutlineColourId, hairline);
-    setColour(juce::Slider::textBoxHighlightColourId, accent);
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff1c2520));
+    setColour(juce::Slider::textBoxHighlightColourId, juce::Colour(0xff667b68));
     setColour(juce::Label::textColourId, ink);
 }
 void BreakbeatLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                                             float position, float startAngle, float endAngle,
                                             juce::Slider&) {
-    float radius = std::min(width, height) * .38f;
+    float radius = std::min(width, height) * .34f;
     auto centre = juce::Point<float>(x + width * .5f, y + height * .5f);
-    juce::Path track, value;
-    track.addCentredArc(centre.x, centre.y, radius, radius, 0, startAngle, endAngle, true);
-    value.addCentredArc(centre.x, centre.y, radius, radius, 0, startAngle,
-                        startAngle + position * (endAngle - startAngle), true);
-    g.setColour(hairline);
-    g.strokePath(track, juce::PathStrokeType(5.0f));
-    g.setColour(accent);
-    g.strokePath(value, juce::PathStrokeType(5.0f));
-    auto face = juce::Rectangle<float>(centre.x - radius + 10, centre.y - radius + 10,
-                                       (radius - 10) * 2, (radius - 10) * 2);
-    g.setColour(panel.brighter(.12f));
-    g.fillEllipse(face);
-    g.setColour(hairline);
-    g.drawEllipse(face, 1);
+    // Etched scale around a plastic encoder, rather than a software progress arc.
+    for (int tick = 0; tick <= 10; ++tick) {
+        float angle = startAngle + (endAngle - startAngle) * tick / 10.0f;
+        auto direction = juce::Point<float>(std::sin(angle), -std::cos(angle));
+        auto a = centre + direction * (radius + 7);
+        auto b = centre + direction * (radius + (tick % 5 == 0 ? 15 : 12));
+        g.setColour(tick <= static_cast<int>(position * 10.0f + .5f) ? ink : hairline);
+        g.drawLine(a.x, a.y, b.x, b.y, tick % 5 == 0 ? 1.7f : 1.0f);
+    }
+    g.setColour(juce::Colour(0xff161a19));
+    g.fillEllipse(centre.x - radius - 1, centre.y - radius - 1, radius * 2 + 2, radius * 2 + 2);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff5d625f), centre.x - radius, centre.y - radius,
+                                         juce::Colour(0xff202524), centre.x + radius, centre.y + radius, false));
+    g.fillEllipse(centre.x - radius + 3, centre.y - radius + 3, (radius - 3) * 2, (radius - 3) * 2);
+    g.setColour(juce::Colour(0xff171b1a));
+    g.fillEllipse(centre.x - radius + 8, centre.y - radius + 8, (radius - 8) * 2, (radius - 8) * 2);
     float angle = startAngle + position * (endAngle - startAngle);
-    auto dot = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (radius - 14);
+    auto direction = juce::Point<float>(std::sin(angle), -std::cos(angle));
+    auto a = centre + direction * (radius - 18);
+    auto b = centre + direction * (radius - 5);
     g.setColour(ink);
-    g.fillEllipse(dot.x - 2.5f, dot.y - 2.5f, 5, 5);
+    g.drawLine(a.x, a.y, b.x, b.y, 2.8f);
 }
 void BreakbeatLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
                                                 const juce::Colour&, bool hover, bool down) {
-    auto b = button.getLocalBounds().toFloat().reduced(.5f);
+    auto b = button.getLocalBounds().toFloat().reduced(1.0f);
     bool selected = button.getToggleState();
-    g.setColour(selected ? accent : hover ? panel.brighter(.16f) : panel);
-    g.fillRoundedRectangle(b, 4);
-    g.setColour(selected ? accent : hairline);
-    g.drawRoundedRectangle(b, 4, 1);
-    if (down) { g.setColour(ink.withAlpha(.12f)); g.fillRoundedRectangle(b, 4); }
+    g.setColour(juce::Colour(0xff555c57));
+    g.fillRect(b.translated(1, 2));
+    g.setGradientFill(juce::ColourGradient(selected || down ? juce::Colour(0xff777d76) : juce::Colour(0xffd7d8cf),
+                                         b.getTopLeft(), hover ? juce::Colour(0xffabb0a8) : juce::Colour(0xff969b94),
+                                         b.getBottomLeft(), false));
+    g.fillRect(b);
+    g.setColour(juce::Colour(0xffe1e2d9));
+    g.drawLine(b.getX(), b.getY(), b.getRight(), b.getY(), 1);
+    if (selected) {
+        g.setColour(accent);
+        g.fillEllipse(b.getX() + 5, b.getCentreY() - 2.5f, 5, 5);
+    }
 }
 void BreakbeatLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool) {
-    g.setFont(juce::FontOptions(13.0f, juce::Font::bold));
-    g.setColour(button.getToggleState() ? inset : ink);
+    g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff202925));
     g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(5), juce::Justification::centred, 1);
 }
 
@@ -110,7 +129,7 @@ BreakbeatEditor::BreakbeatEditor(BreakbeatProcessor& p) : AudioProcessorEditor(&
     addDial(6, "attack", "ATTACK / MS", 0, 0);
     addDial(6, "decay", "DECAY / MS", 1, 0);
     addSwitch(6, "reverse", "EARLY REVERSE", 2, 0);
-    setSize(960, 600);
+    setSize(1080, 540);
     setPage(0);
     setEditLoop(0);
     startTimerHz(15);
@@ -123,10 +142,10 @@ void BreakbeatEditor::addDial(int group, const juce::String& id, const juce::Str
     control.row = row;
     control.label = std::make_unique<juce::Label>(id, name);
     control.label->setJustificationType(juce::Justification::centred);
-    control.label->setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    control.label->setFont(juce::FontOptions(10.5f, juce::Font::bold));
     control.slider = std::make_unique<juce::Slider>();
     control.slider->setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    control.slider->setTextBoxStyle(juce::Slider::TextBoxBelow, false, 90, 24);
+    control.slider->setTextBoxStyle(juce::Slider::TextBoxBelow, false, 92, 23);
     control.attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.state, id, *control.slider);
     addAndMakeVisible(*control.label);
     addAndMakeVisible(*control.slider);
@@ -172,100 +191,119 @@ void BreakbeatEditor::openSample(int loop) {
         });
 }
 void BreakbeatEditor::resized() {
-    for (int i = 0; i < 7; ++i) tabs[i]->setBounds(20, 112 + i * 48, 140, 38);
+    for (int i = 0; i < 7; ++i) tabs[i]->setBounds(59 + i * 138, 483, 130, 31);
     for (int i = 0; i < 2; ++i) {
-        loadButtons[i]->setBounds(452 + i * 371, 94, 91, 32);
-        editButtons[i]->setBounds(205 + i * 106, 215, 98, 32);
+        loadButtons[i]->setBounds(425 + i * 494, 107, 85, 27);
+        editButtons[i]->setBounds(72 + i * 100, 209, 92, 29);
     }
-    waveformBounds = {205, 300, 717, 222};
-    constexpr int contentX = 195, contentWidth = 735;
+    waveformBounds = {70, 249, 940, 198};
+    constexpr int contentX = 70, contentWidth = 940;
     for (auto& c : controls) {
         int columns = c.page == 0 ? 5 : 4;
         int cellWidth = contentWidth / columns;
         int x = contentX + c.column * cellWidth;
-        int y = 218 + c.row * 156;
-        c.slider->setBounds(x + 12, y, cellWidth - 24, 114);
-        c.label->setBounds(x + 2, y + 114, cellWidth - 4, 23);
+        int y = 220 + c.row * 116;
+        c.slider->setBounds(x + 27, y, cellWidth - 54, 98);
+        c.label->setBounds(x + 3, y + 96, cellWidth - 6, 20);
     }
     for (auto& s : switches) {
-        if (s.page == 2) s.button->setBounds(460 + s.column * 118, 215, 108, 32);
-        else s.button->setBounds(contentX + s.column * 180 + 24, 246 + s.row * 156, 146, 42);
+        if (s.page == 2) s.button->setBounds(340 + s.column * 110, 209, 102, 29);
+        else s.button->setBounds(contentX + s.column * 235 + 65, 263 + s.row * 116, 106, 33);
     }
 }
 void BreakbeatEditor::paint(juce::Graphics& g) {
     g.fillAll(background);
-    g.setColour(inset);
-    g.fillRect(0, 0, 180, getHeight());
-    g.setColour(hairline);
-    g.drawVerticalLine(179, 0, static_cast<float>(getHeight()));
-    g.setColour(accent);
-    g.fillRect(20, 27, 5, 24);
-    g.setColour(ink);
-    g.setFont(juce::FontOptions(21.0f, juce::Font::bold));
-    g.drawText("BREAKBEAT", 35, 24, 340, 32, juce::Justification::left);
-    g.setColour(muted);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd0d1c9), juce::Point<float>(30, 0),
+                                         juce::Colour(0xff9fa39d), juce::Point<float>(30, 540), false));
+    g.fillRect(30, 0, 1020, 540);
+    g.setColour(juce::Colour(0xff666b66));
+    g.fillRect(0, 0, 30, 540);
+    g.fillRect(1050, 0, 30, 540);
+    g.setColour(juce::Colour(0xffe4e4da));
+    g.fillRect(30, 0, 1020, 2);
+    g.setColour(juce::Colour(0xff60665f));
+    g.fillRect(30, 537, 1020, 3);
+    for (float x : {15.0f, 1065.0f}) for (float y : {31.0f, 509.0f}) drawScrew(g, x, y);
+    g.setColour(juce::Colour(0xff252b29));
+    g.setFont(juce::FontOptions(25.0f, juce::Font::bold));
+    g.drawText("BREAKBEAT", 65, 23, 310, 34, juce::Justification::left);
     g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-    g.drawText("SCHWUNG", 22, 76, 130, 22, juce::Justification::left);
-    g.drawText("DESKTOP  /  V0.1", 20, getHeight() - 35, 140, 18, juce::Justification::left);
+    g.drawText("SCHWUNG", 805, 24, 200, 19, juce::Justification::right);
+    g.setFont(juce::FontOptions(10.0f));
+    g.drawText("DIGITAL BREAK SAMPLER  /  BB-08", 730, 43, 275, 15, juce::Justification::right);
+    g.setColour(juce::Colour(0xff788078));
+    for (int x = 55; x < 1020; x += 5) g.drawVerticalLine(x, 66, 68);
+
     for (int i = 0; i < 2; ++i) {
-        auto bounds = juce::Rectangle<float>(static_cast<float>(195 + i * 371), 75, 364, 72);
-        g.setColour(panel);
-        g.fillRoundedRectangle(bounds, 5);
-        g.setColour(hairline);
-        g.drawRoundedRectangle(bounds, 5, 1);
-        g.setColour(i == processor.currentLoop() ? accent : muted);
-        g.setFont(juce::FontOptions(25.0f, juce::Font::bold));
+        auto bounds = juce::Rectangle<float>(static_cast<float>(65 + i * 495), 81, 458, 72);
+        g.setColour(juce::Colour(0xff555d55));
+        g.fillRect(bounds.expanded(2));
+        g.setColour(inset);
+        g.fillRect(bounds);
+        g.setColour(juce::Colour(0xff637763));
+        g.drawLine(bounds.getX(), bounds.getY(), bounds.getRight(), bounds.getY(), 2);
+        g.drawLine(bounds.getX(), bounds.getY(), bounds.getX(), bounds.getBottom(), 2);
+        g.setColour(i == processor.currentLoop() ? accent : juce::Colour(0xff596d59));
         int x = static_cast<int>(bounds.getX());
-        g.drawText(i ? "B" : "A", x + 13, 91, 38, 36, juce::Justification::centred);
-        g.setColour(ink);
-        g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
+        g.fillEllipse(x + 20, 125, 8, 8);
+        g.setColour(juce::Colour(0xff26372c));
+        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 16.0f, juce::Font::bold));
+        g.drawText(i ? "B>" : "A>", x + 15, 94, 38, 25, juce::Justification::left);
+        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
         auto path = processor.samplePath(i);
-        auto name = path.isEmpty() ? juce::String("No sample loaded") : juce::File(path).getFileName();
-        g.drawFittedText(name, x + 58, 88, 190, 25,
+        auto name = path.isEmpty() ? juce::String("NO SAMPLE") : juce::File(path).getFileName().toUpperCase();
+        g.drawFittedText(name, x + 61, 94, 285, 25,
                          juce::Justification::centredLeft, 1);
-        g.setColour(muted);
-        g.setFont(juce::FontOptions(11.0f));
+        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
         auto sample = processor.sampleForDisplay(i);
         auto detail = sample && sample->valid()
-            ? juce::String(sample->frames() / sample->sampleRate, 1) + " sec  /  " + juce::String(static_cast<int>(sample->sampleRate)) + " Hz"
+            ? juce::String(sample->frames() / sample->sampleRate, 1) + " SEC   " + juce::String(static_cast<int>(sample->sampleRate)) + " HZ"
             : juce::String("WAV  AIFF  FLAC  MP3");
-        g.drawText(detail, x + 58, 116, 190, 17, juce::Justification::left);
+        g.drawText(detail, x + 61, 124, 290, 16, juce::Justification::left);
     }
-    g.setColour(accent);
-    g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-    g.drawText(pageHeadings[page], 201, 184, 220, 22, juce::Justification::left);
+    g.setColour(juce::Colour(0xff181d1c));
+    g.fillRect(54, 177, 972, 286);
+    g.setColour(juce::Colour(0xff767e77));
+    g.fillRect(56, 179, 968, 282);
+    g.setColour(panel);
+    g.fillRect(59, 182, 962, 276);
+    g.setColour(juce::Colour(0xffd5dbcf));
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.drawText(pageHeadings[page], 70, 188, 360, 18, juce::Justification::left);
     g.setColour(muted);
-    g.setFont(juce::FontOptions(12.0f));
-    g.drawFittedText(pageHints[page], 425, 184, 500, 22, juce::Justification::centredRight, 1);
-    g.setColour(hairline);
-    g.fillRect(205, 207, 717, 1);
+    g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+    g.drawFittedText(pageHints[page], 498, 188, 512, 18, juce::Justification::centredRight, 1);
+    g.setColour(juce::Colour(0xff5f6861));
+    g.fillRect(69, 210, 942, 1);
     if (page == 0) {
         g.setColour(muted);
-        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-        g.drawText("EIGHT POSITIONS", 205, 416, 200, 18, juce::Justification::left);
+        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+        g.drawText("SLICE POSITION", 73, 385, 200, 18, juce::Justification::left);
         auto active = processor.currentSlice();
         for (int i = 0; i < 8; ++i) {
-            auto box = juce::Rectangle<float>(205 + i * 90.5f, 448, 82, 52);
-            g.setColour(i == active ? accent : panel);
-            g.fillRoundedRectangle(box, 4);
-            g.setColour(i == active ? inset : ink);
-            g.setFont(juce::FontOptions(17.0f, juce::Font::bold));
+            auto box = juce::Rectangle<float>(73 + i * 117.5f, 407, 104, 35);
+            g.setColour(i == active ? inset : juce::Colour(0xff252b29));
+            g.fillRect(box);
+            g.setColour(i == active ? juce::Colour(0xff253b2c) : ink);
+            g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 15.0f, juce::Font::bold));
             g.drawText(juce::String(i + 1), box.toNearestInt(), juce::Justification::centred);
+            g.setColour(i == active ? accent : juce::Colour(0xff657267));
+            g.fillEllipse(box.getCentreX() - 3, box.getY() - 9, 6, 6);
         }
     }
-    g.setColour(hairline);
-    g.fillRect(195, 549, 735, 1);
-    g.setColour(muted);
-    g.setFont(juce::FontOptions(11.0f));
-    g.drawText("MIDI 36-51  /  A1-A8  B1-B8", 205, 558, 380, 19, juce::Justification::left);
-    g.drawText("HOST SYNC", 755, 558, 167, 19, juce::Justification::right);
+    g.setColour(juce::Colour(0xff5b625c));
+    g.fillRect(54, 468, 972, 1);
+    g.setColour(juce::Colour(0xff354037));
+    g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::plain));
+    g.drawText("MIDI 36-51  /  HOST SYNC", 69, 515, 300, 14, juce::Justification::left);
+    g.drawText("SCHWUNG  BB-08", 835, 515, 175, 14, juce::Justification::right);
     if (page != 2) return;
     g.setColour(inset);
-    g.fillRoundedRectangle(waveformBounds.toFloat(), 5);
+    g.fillRect(waveformBounds);
     auto sample = processor.sampleForDisplay(editLoop);
     if (!sample || !sample->valid()) {
-        g.setColour(muted);
-        g.setFont(juce::FontOptions(14.0f));
+        g.setColour(juce::Colour(0xff314937));
+        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 14.0f, juce::Font::plain));
         g.drawText("LOAD A SAMPLE TO EDIT ITS EIGHT STARTS", waveformBounds, juce::Justification::centred);
         return;
     }
@@ -282,7 +320,7 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
         }
     }
     auto mid = waveformBounds.getCentreY();
-    g.setColour(hairline);
+    g.setColour(juce::Colour(0xff82947f));
     for (int j = 1; j < 8 && draggingMarker < 0; ++j) {
         int x = waveformBounds.getX() + j * waveformBounds.getWidth() / 8;
         g.drawVerticalLine(x, static_cast<float>(waveformBounds.getY()), static_cast<float>(waveformBounds.getBottom()));
@@ -311,11 +349,11 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
             : waveformBounds.getX() + static_cast<int>(marker * waveformBounds.getWidth());
         if (x < waveformBounds.getX() || x > waveformBounds.getRight()) continue;
         bool highlighted = j == draggingMarker || (draggingMarker < 0 && processor.currentLoop() == editLoop && processor.currentSlice() == j);
-        g.setColour(highlighted ? accent : ink);
+        g.setColour(highlighted ? accent : juce::Colour(0xff34503a));
         g.drawVerticalLine(x, static_cast<float>(waveformBounds.getY()), static_cast<float>(waveformBounds.getBottom()));
         g.fillRoundedRectangle(juce::Rectangle<float>(static_cast<float>(x + 2), static_cast<float>(waveformBounds.getY() + 5), 20, 20), 2);
-        g.setColour(inset);
-        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.setColour(highlighted ? juce::Colour(0xfff8e7dc) : juce::Colour(0xffd8e3ce));
+        g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::bold));
         g.drawText(juce::String(j + 1), x + 2, waveformBounds.getY() + 5, 20, 20, juce::Justification::centred);
     }
     if (draggingMarker < 0 && processor.currentLoop() == editLoop) {
@@ -326,8 +364,8 @@ void BreakbeatEditor::paint(juce::Graphics& g) {
         g.setColour(accent);
         g.drawVerticalLine(x, static_cast<float>(waveformBounds.getY()), static_cast<float>(waveformBounds.getBottom()));
     }
-    g.setColour(muted);
-    g.setFont(juce::FontOptions(11.0f));
+    g.setColour(juce::Colour(0xff304833));
+    g.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
     g.drawText(draggingMarker >= 0 ? "FINE EDIT  /  RELEASE FOR FULL VIEW"
                                    : "DRAG A NUMBERED START MARKER",
                waveformBounds.getX() + 10, waveformBounds.getBottom() - 26, 350, 20, juce::Justification::left);
