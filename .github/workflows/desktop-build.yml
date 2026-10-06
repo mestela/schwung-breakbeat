@@ -33,8 +33,22 @@ jobs:
         with:
           name: schwung-breakbeat-macOS
           path: desktop/build/Schwung-Breakbeat-macOS.vst3.dmg
+      - name: Package Windows downloads
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vst3 = 'desktop/build/SchwungBreakbeat_artefacts/Release/VST3/Schwung Breakbeat.vst3'
+          $standalone = 'desktop/build/SchwungBreakbeat_artefacts/Release/Standalone/Schwung Breakbeat.exe'
+          if (!(Test-Path -LiteralPath $vst3) -or !(Test-Path -LiteralPath $standalone)) { throw 'Windows plug-in or standalone executable is missing' }
+          Compress-Archive -LiteralPath $vst3 -DestinationPath 'desktop/build/Schwung-Breakbeat-Windows-VST3.zip' -Force
+          Copy-Item -LiteralPath $standalone -Destination 'desktop/build/Schwung-Breakbeat-Windows.exe'
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: schwung-breakbeat-Windows
-          path: desktop/build/SchwungBreakbeat_artefacts/Release/VST3/
+          name: schwung-breakbeat-Windows-VST3
+          path: desktop/build/Schwung-Breakbeat-Windows-VST3.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: schwung-breakbeat-Windows-EXE
+          path: desktop/build/Schwung-Breakbeat-Windows.exe
